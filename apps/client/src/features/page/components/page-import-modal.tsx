@@ -12,6 +12,7 @@ import {
   IconCheck,
   IconFileCode,
   IconFileTypeZip,
+  IconFileText,
   IconMarkdown,
   IconX,
 } from "@tabler/icons-react";
@@ -86,6 +87,7 @@ function ImportFormatSelection({ spaceId, onClose }: ImportFormatSelection) {
 
   const markdownFileRef = useRef<() => void>(null);
   const htmlFileRef = useRef<() => void>(null);
+  const docxFileRef = useRef<() => void>(null);
   const notionFileRef = useRef<() => void>(null);
   const confluenceFileRef = useRef<() => void>(null);
   const zipFileRef = useRef<() => void>(null);
@@ -261,6 +263,7 @@ function ImportFormatSelection({ spaceId, onClose }: ImportFormatSelection) {
       // Reset file inputs after successful upload
       if (markdownFileRef.current) markdownFileRef.current();
       if (htmlFileRef.current) htmlFileRef.current();
+      if (docxFileRef.current) docxFileRef.current();
 
       const pageCountText =
         pageCount === 1 ? `1 ${t("page")}` : `${pageCount} ${t("pages")}`;
@@ -317,6 +320,19 @@ function ImportFormatSelection({ spaceId, onClose }: ImportFormatSelection) {
           )}
         </FileButton>
 
+        <FileButton onChange={handleFileUpload} accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple resetRef={docxFileRef}>
+          {(props) => (
+            <Button
+              justify="start"
+              variant="default"
+              leftSection={<IconFileText size={18} />}
+              {...props}
+            >
+              DOCX
+            </Button>
+          )}
+        </FileButton>
+
         <FileButton
           onChange={(file) => handleZipUpload(file, "notion")}
           accept="application/zip"
@@ -364,7 +380,7 @@ function ImportFormatSelection({ spaceId, onClose }: ImportFormatSelection) {
           </Text>
           <Text ta="center" size="sm" c="dimmed" inline py="sm">
             {t(
-              `Upload zip file containing Markdown and HTML files. Max: {{sizeLimit}}`,
+              `Upload zip file containing Markdown, HTML, and DOCX files. Max: {{sizeLimit}}`,
               {
                 sizeLimit: formatBytes(getFileImportSizeLimit()),
               },

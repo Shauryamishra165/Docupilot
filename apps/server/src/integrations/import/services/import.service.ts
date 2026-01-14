@@ -10,7 +10,11 @@ import {
 } from '../../../collaboration/collaboration.util';
 import { InjectKysely } from 'nestjs-kysely';
 import { KyselyDB } from '@docmost/db/types/kysely.types';
-import { generateSlugId, sanitizeFileName } from '../../../common/helpers';
+import {
+  generateSlugId,
+  sanitizeFileName,
+  docxBufferToHtml,
+} from '../../../common/helpers';
 import { generateJitteredKeyBetween } from 'fractional-indexing-jittered';
 import { TiptapTransformer } from '@hocuspocus/transformer';
 import * as Y from 'yjs';
@@ -60,6 +64,8 @@ export class ImportService {
         prosemirrorState = await this.processMarkdown(fileContent);
       } else if (fileExtension.endsWith('.html')) {
         prosemirrorState = await this.processHTML(fileContent);
+      } else if (fileExtension.endsWith('.docx')) {
+        prosemirrorState = await this.processDocx(fileBuffer);
       }
     } catch (err) {
       const message = 'Error processing file content';
@@ -120,6 +126,15 @@ export class ImportService {
   async processHTML(htmlInput: string): Promise<any> {
     try {
       return htmlToJson(htmlInput);
+    } catch (err) {
+      throw err;
+    }
+  }
+
+  async processDocx(docxBuffer: Buffer): Promise<any> {
+    try {
+      const html = await docxBufferToHtml(docxBuffer);
+      return this.processHTML(html);
     } catch (err) {
       throw err;
     }

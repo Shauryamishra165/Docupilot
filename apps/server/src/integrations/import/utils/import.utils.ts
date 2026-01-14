@@ -1,6 +1,9 @@
 import { promises as fs } from 'fs';
 import * as path from 'path';
 
+/** Supported document extensions for import */
+export const IMPORTABLE_DOC_EXTENSIONS = ['.md', '.html', '.docx'];
+
 export async function buildAttachmentCandidates(
   extractDir: string,
 ): Promise<Map<string, string>> {
@@ -11,7 +14,7 @@ export async function buildAttachmentCandidates(
       if (ent.isDirectory()) {
         await walk(abs);
       } else {
-        if (['.md', '.html'].includes(path.extname(ent.name).toLowerCase())) {
+        if (IMPORTABLE_DOC_EXTENSIONS.includes(path.extname(ent.name).toLowerCase())) {
           continue;
         }
 
@@ -42,7 +45,7 @@ export function resolveRelativeAttachmentPath(
   return null;
 }
 
-export async function collectMarkdownAndHtmlFiles(
+export async function collectImportableDocFiles(
   dir: string,
 ): Promise<string[]> {
   const results: string[] = [];
@@ -54,7 +57,7 @@ export async function collectMarkdownAndHtmlFiles(
       if (ent.isDirectory()) {
         await walk(fullPath);
       } else if (
-        ['.md', '.html'].includes(path.extname(ent.name).toLowerCase())
+        IMPORTABLE_DOC_EXTENSIONS.includes(path.extname(ent.name).toLowerCase())
       ) {
         results.push(fullPath);
       }
@@ -64,6 +67,11 @@ export async function collectMarkdownAndHtmlFiles(
   await walk(dir);
   return results;
 }
+
+/**
+ * @deprecated Use collectImportableDocFiles instead
+ */
+export const collectMarkdownAndHtmlFiles = collectImportableDocFiles;
 
 export function stripNotionID(fileName: string): string {
   // Handle optional separator (space or dash) + 32 alphanumeric chars at end

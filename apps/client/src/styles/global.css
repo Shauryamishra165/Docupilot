@@ -1,0 +1,27 @@
+/* Image rendering for better HD quality */
+img,
+svg,
+[role="img"] {
+  image-rendering: -webkit-optimize-contrast; /* Safari */
+  image-rendering: crisp-edges; /* Standard */
+  image-rendering: pixelated; /* For pixel art */
+}
+
+/* For high-DPI displays */
+@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+  img {
+    image-rendering: -webkit-optimize-contrast;
+  }
+}
+
+/* Mantine Image component */
+.mantine-Image-image {
+  image-rendering: crisp-edges;
+}
+
+/* Icon rendering for better quality */
+svg {
+  shape-rendering: geometricPrecision;
+  text-rendering: optimizeLegibility;
+}
+

@@ -14,7 +14,7 @@ import { pipeline } from 'node:stream/promises';
 import { createWriteStream } from 'node:fs';
 import { ImportService } from './import.service';
 import { promises as fs } from 'fs';
-import { generateSlugId } from '../../../common/helpers';
+import { generateSlugId, docxBufferToHtml } from '../../../common/helpers';
 import { v7 } from 'uuid';
 import { generateJitteredKeyBetween } from 'fractional-indexing-jittered';
 import { FileTask, InsertablePage } from '@docmost/db/types/entity.types';
@@ -23,7 +23,7 @@ import { getProsemirrorContent } from '../../../common/helpers/prosemirror/utils
 import { formatImportHtml } from '../utils/import-formatter';
 import {
   buildAttachmentCandidates,
-  collectMarkdownAndHtmlFiles,
+  collectImportableDocFiles,
   stripNotionID,
 } from '../utils/import.utils';
 import { executeTx } from '@docmost/db/utils';
@@ -152,7 +152,7 @@ export class FileImportTaskService {
     fileTask: FileTask;
   }): Promise<void> {
     const { extractDir, fileTask } = opts;
-    const allFiles = await collectMarkdownAndHtmlFiles(extractDir);
+    const allFiles = await collectImportableDocFiles(extractDir);
     const attachmentCandidates = await buildAttachmentCandidates(extractDir);
 
     const pagesMap = new Map<string, ImportPageNode>();
@@ -210,7 +210,7 @@ export class FileImportTaskService {
       }
     }
 
-    // For each folder with content, create a placeholder page if no corresponding .md or .html exists
+    // For each folder with content, create a placeholder page if no corresponding .md, .html, or .docx exists
     foldersWithContent.forEach((folderPath) => {
       if (
         skipRootFolder &&
@@ -221,8 +221,9 @@ export class FileImportTaskService {
 
       const mdPath = `${folderPath}.md`;
       const htmlPath = `${folderPath}.html`;
+      const docxPath = `${folderPath}.docx`;
 
-      if (!pagesMap.has(mdPath) && !pagesMap.has(htmlPath)) {
+      if (!pagesMap.has(mdPath) && !pagesMap.has(htmlPath) && !pagesMap.has(docxPath)) {
         const folderName = path.basename(folderPath);
         pagesMap.set(mdPath, {
           id: v7(),
@@ -244,12 +245,17 @@ export class FileImportTaskService {
       while (segments.length) {
         const tryMd = segments.join('/') + '.md';
         const tryHtml = segments.join('/') + '.html';
+        const tryDocx = segments.join('/') + '.docx';
         if (pagesMap.has(tryMd)) {
           parentPage = pagesMap.get(tryMd)!;
           break;
         }
         if (pagesMap.has(tryHtml)) {
           parentPage = pagesMap.get(tryHtml)!;
+          break;
+        }
+        if (pagesMap.has(tryDocx)) {
+          parentPage = pagesMap.get(tryDocx)!;
           break;
         }
         segments.pop();
@@ -382,10 +388,19 @@ export class FileImportTaskService {
             // Check if file exists (placeholder pages won't have physical files)
             try {
               await fs.access(absPath);
-              content = await fs.readFile(absPath, 'utf-8');
+              const ext = page.fileExtension.toLowerCase();
 
-              if (page.fileExtension.toLowerCase() === '.md') {
-                content = await markdownToHtml(content);
+              if (ext === '.docx') {
+                // DOCX files need to be read as binary buffer
+                const buffer = await fs.readFile(absPath);
+                content = await docxBufferToHtml(buffer);
+              } else {
+                // MD and HTML files can be read as UTF-8 text
+                content = await fs.readFile(absPath, 'utf-8');
+
+                if (ext === '.md') {
+                  content = await markdownToHtml(content);
+                }
               }
             } catch (err: any) {
               if (err?.code === 'ENOENT') {
