@@ -1,0 +1,235 @@
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+  GatewayTimeoutException,
+} from '@nestjs/common';
+import { EnvironmentService } from '../environment/environment.service';
+import { AiChatRequestDto, AiChatResponseDto } from './dto/ai-chat.dto';
+import { Workspace } from '@docmost/db/types/entity.types';
+
+@Injectable()
+export class AiChatService {
+  private readonly logger = new Logger(AiChatService.name);
+  private readonly baseUrl: string;
+  private readonly apiKey: string;
+  private readonly timeout: number;
+
+  constructor(private readonly environmentService: EnvironmentService) {
+    this.baseUrl =
+      process.env.EXTERNAL_SERVICE_URL ||
+      this.environmentService.getExternalServiceUrl() ||
+      'http://localhost:8000';
+    this.apiKey =
+      process.env.EXTERNAL_SERVICE_API_KEY ||
+      this.environmentService.getExternalServiceApiKey() ||
+      'parth128';
+    this.timeout =
+      parseInt(
+        process.env.EXTERNAL_SERVICE_TIMEOUT ||
+          this.environmentService.getExternalServiceTimeout() ||
+          '30000',
+        10,
+      ) || 30000;
+
+    this.logger.log(
+      `AI Chat Service configured: ${this.baseUrl} (timeout: ${this.timeout}ms)`,
+    );
+  }
+
+  /**
+   * Send chat message to AI service
+   */
+  async sendChatMessage(
+    request: AiChatRequestDto,
+    workspace: Workspace,
+    userId: string,
+  ): Promise<AiChatResponseDto> {
+    try {
+      const url = `${this.baseUrl}/api/chat`;
+
+      // Prepare headers with authentication
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'X-API-Key': this.apiKey,
+        'X-Workspace-Id': workspace.id,
+        'X-User-Id': userId,
+      };
+
+      // Prepare request
+      const requestOptions: RequestInit = {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          messages: request.messages,
+        }),
+        signal: AbortSignal.timeout(this.timeout),
+      };
+
+      this.logger.log(
+        `Sending AI chat request (workspace: ${workspace.id}, user: ${userId}, messages: ${request.messages.length})`,
+      );
+
+      // Make the request
+      const response = await fetch(url, requestOptions);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        this.logger.error(
+          `AI service error: ${response.status} - ${errorText}`,
+        );
+        throw new ServiceUnavailableException(
+          `AI service returned error: ${response.statusText}`,
+        );
+      }
+
+      // Parse response
+      const data = await response.json();
+
+      this.logger.debug(
+        `AI chat response received (workspace: ${workspace.id})`,
+      );
+
+      return {
+        message: data.message || 'No response from AI service',
+        success: data.success !== false,
+      };
+    } catch (error: any) {
+      if (error?.name === 'AbortError' || error?.name === 'TimeoutError') {
+        this.logger.error(`AI service timeout after ${this.timeout}ms`);
+        throw new GatewayTimeoutException(
+          `AI service request timed out after ${this.timeout}ms`,
+        );
+      }
+
+      if (error instanceof ServiceUnavailableException) {
+        throw error;
+      }
+
+      // Network errors
+      if (
+        error?.message?.includes('fetch failed') ||
+        error?.code === 'ECONNREFUSED'
+      ) {
+        this.logger.error('AI service connection failed', error);
+        throw new ServiceUnavailableException(
+          'AI service is currently unavailable',
+        );
+      }
+
+      // Generic error
+      this.logger.error('AI chat error', error);
+      throw new ServiceUnavailableException(
+        `Failed to communicate with AI service: ${error?.message || 'Unknown error'}`,
+      );
+    }
+  }
+
+  /**
+   * Get chat history list
+   */
+  async getChatHistory(workspace: Workspace, userId: string): Promise<any> {
+    try {
+      const url = `${this.baseUrl}/api/history`;
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'X-API-Key': this.apiKey,
+        'X-Workspace-Id': workspace.id,
+        'X-User-Id': userId,
+      };
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers,
+        signal: AbortSignal.timeout(this.timeout),
+      });
+
+      if (!response.ok) {
+        throw new ServiceUnavailableException('Failed to fetch chat history');
+      }
+
+      return await response.json();
+    } catch (error: any) {
+      this.logger.error('Error fetching chat history', error);
+      throw new ServiceUnavailableException('Failed to fetch chat history');
+    }
+  }
+
+  /**
+   * Get a specific chat
+   */
+  async getChat(
+    chatId: string,
+    workspace: Workspace,
+    userId: string,
+  ): Promise<any> {
+    try {
+      const url = `${this.baseUrl}/api/history/${chatId}`;
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'X-API-Key': this.apiKey,
+        'X-Workspace-Id': workspace.id,
+        'X-User-Id': userId,
+      };
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers,
+        signal: AbortSignal.timeout(this.timeout),
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          throw new ServiceUnavailableException('Chat not found');
+        }
+        throw new ServiceUnavailableException('Failed to fetch chat');
+      }
+
+      return await response.json();
+    } catch (error: any) {
+      this.logger.error('Error fetching chat', error);
+      throw new ServiceUnavailableException('Failed to fetch chat');
+    }
+  }
+
+  /**
+   * Delete a chat
+   */
+  async deleteChat(
+    chatId: string,
+    workspace: Workspace,
+    userId: string,
+  ): Promise<any> {
+    try {
+      const url = `${this.baseUrl}/api/history/${chatId}`;
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'X-API-Key': this.apiKey,
+        'X-Workspace-Id': workspace.id,
+        'X-User-Id': userId,
+      };
+
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers,
+        signal: AbortSignal.timeout(this.timeout),
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          throw new ServiceUnavailableException('Chat not found');
+        }
+        throw new ServiceUnavailableException('Failed to delete chat');
+      }
+
+      return await response.json();
+    } catch (error: any) {
+      this.logger.error('Error deleting chat', error);
+      throw new ServiceUnavailableException('Failed to delete chat');
+    }
+  }
+}
+

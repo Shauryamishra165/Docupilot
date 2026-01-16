@@ -277,4 +277,19 @@ export class EnvironmentService {
       'http://localhost:11434',
     );
   }
+
+  getExternalServiceUrl(): string {
+    return this.configService.get<string>(
+      'EXTERNAL_SERVICE_URL',
+      'http://localhost:8000',
+    );
+  }
+
+  getExternalServiceApiKey(): string {
+    return this.configService.get<string>('EXTERNAL_SERVICE_API_KEY');
+  }
+
+  getExternalServiceTimeout(): string {
+    return this.configService.get<string>('EXTERNAL_SERVICE_TIMEOUT', '30000');
+  }
 }

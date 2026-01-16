@@ -10,6 +10,7 @@ import {
   IconMessage,
   IconPrinter,
   IconSearch,
+  IconSparkles,
   IconTrash,
   IconWifiOff,
 } from "@tabler/icons-react";
@@ -108,6 +109,16 @@ export default function PageHeaderMenu({ readOnly }: PageHeaderMenuProps) {
           onClick={() => toggleAside("toc")}
         >
           <IconList size={20} stroke={2} />
+        </ActionIcon>
+      </Tooltip>
+
+      <Tooltip label={t("AI Assistant")} openDelay={250} withArrow>
+        <ActionIcon
+          variant="default"
+          style={{ border: "none" }}
+          onClick={() => toggleAside("ai")}
+        >
+          <IconSparkles size={20} stroke={2} />
         </ActionIcon>
       </Tooltip>
 

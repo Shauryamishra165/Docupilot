@@ -14,6 +14,11 @@
   }
 }
 
+.aside :global([data-ai-tab="true"]) {
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
 .resizeHandle {
   width: 3px;
   cursor: col-resize;
