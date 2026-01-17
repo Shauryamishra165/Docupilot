@@ -28,7 +28,7 @@ export class ExternalServiceService {
         process.env.EXTERNAL_SERVICE_TIMEOUT ||
           this.environmentService.getExternalServiceTimeout(),
         10,
-      ) || 30000;
+      ) || 240000; // 4 minutes default (240 seconds = 240000ms)
 
     this.logger.log(
       `External Service configured: ${this.baseUrl} (timeout: ${this.timeout}ms)`,

@@ -8,6 +8,8 @@ import DOMPurify from "dompurify";
 import api from "@/lib/api-client";
 import classes from "./ai-sidebar.module.css";
 import clsx from "clsx";
+import { useParams } from "react-router-dom";
+import { extractPageSlugId } from "@/lib";
 
 type Message = {
   id: string;
@@ -22,6 +24,8 @@ type AiSidebarProps = {
 
 export const AiSidebar: FC<AiSidebarProps> = (props) => {
   const { t } = useTranslation();
+  const { pageSlug } = useParams();
+  const pageId = pageSlug ? extractPageSlugId(pageSlug) : undefined;
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -103,8 +107,10 @@ export const AiSidebar: FC<AiSidebarProps> = (props) => {
 
       // Call backend AI chat endpoint (which will route to AI service)
       // Uses JWT authentication automatically via api client
+      // Pass pageId if available so AI knows which document we're working with
       const response = await api.post("/external-service/ai/chat", {
         messages: apiMessages,
+        ...(pageId && { pageId }), // Include pageId if available
       });
 
       const assistantMessage: Message = {

@@ -15,7 +15,9 @@ export class AiChatService {
   private readonly apiKey: string;
   private readonly timeout: number;
 
-  constructor(private readonly environmentService: EnvironmentService) {
+  constructor(
+    private readonly environmentService: EnvironmentService,
+  ) {
     this.baseUrl =
       process.env.EXTERNAL_SERVICE_URL ||
       this.environmentService.getExternalServiceUrl() ||
@@ -28,9 +30,9 @@ export class AiChatService {
       parseInt(
         process.env.EXTERNAL_SERVICE_TIMEOUT ||
           this.environmentService.getExternalServiceTimeout() ||
-          '30000',
+          '240000', // 4 minutes default (240 seconds = 240000ms)
         10,
-      ) || 30000;
+      ) || 240000; // 4 minutes default
 
     this.logger.log(
       `AI Chat Service configured: ${this.baseUrl} (timeout: ${this.timeout}ms)`,
@@ -39,6 +41,8 @@ export class AiChatService {
 
   /**
    * Send chat message to AI service
+   * Headers include workspace ID, user ID, and page ID for context
+   * AI service can use tools (like read_document) to fetch content when needed
    */
   async sendChatMessage(
     request: AiChatRequestDto,
@@ -56,18 +60,31 @@ export class AiChatService {
         'X-User-Id': userId,
       };
 
+      // Add page ID to headers if provided
+      if (request.pageId) {
+        headers['X-Page-Id'] = request.pageId;
+      }
+
+      // Prepare request body
+      const requestBody: any = {
+        messages: request.messages,
+      };
+
+      // Include pageId in request body if provided
+      if (request.pageId) {
+        requestBody.pageId = request.pageId;
+      }
+
       // Prepare request
       const requestOptions: RequestInit = {
         method: 'POST',
         headers,
-        body: JSON.stringify({
-          messages: request.messages,
-        }),
+        body: JSON.stringify(requestBody),
         signal: AbortSignal.timeout(this.timeout),
       };
 
       this.logger.log(
-        `Sending AI chat request (workspace: ${workspace.id}, user: ${userId}, messages: ${request.messages.length})`,
+        `Sending AI chat request (workspace: ${workspace.id}, user: ${userId}, messages: ${request.messages.length}, pageId: ${request.pageId || 'none'})`,
       );
 
       // Make the request
