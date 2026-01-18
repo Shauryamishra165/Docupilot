@@ -13,6 +13,9 @@ import {
   DeleteContentTool,
   FormatTextTool,
   InsertBlockTool,
+  FindAndReplaceTool,
+  ApplyFormattingTool,
+  ClearFormattingTool,
 } from '../types/ai-tools.types';
 
 export class ToolExecutor {
@@ -39,6 +42,12 @@ export class ToolExecutor {
           return this.formatText(toolCall.params);
         case 'insert_block':
           return this.insertBlock(toolCall.params);
+        case 'find_and_replace':
+          return this.findAndReplace(toolCall.params);
+        case 'apply_formatting':
+          return this.applyFormatting(toolCall.params);
+        case 'clear_formatting':
+          return this.clearFormatting(toolCall.params);
         default:
           console.warn('[ToolExecutor] Unknown tool:', toolCall);
           return false;
@@ -224,6 +233,191 @@ export class ToolExecutor {
       default:
         // Fallback to plain paragraph
         return this.editor.commands.insertContent(content);
+    }
+  }
+
+  /**
+   * Find and replace text in the document
+   */
+  private findAndReplace(params: FindAndReplaceTool['params']): boolean {
+    const { searchText, replaceText, replaceAll = true, caseSensitive = false } = params; // Default replaceAll to true
+
+    if (!searchText || searchText.trim().length === 0) {
+      console.warn('[ToolExecutor] findAndReplace: Empty search text provided');
+      return false;
+    }
+
+    if (replaceText === undefined || replaceText === null) {
+      console.warn('[ToolExecutor] findAndReplace: Replace text is required');
+      return false;
+    }
+
+    try {
+      // Set search term (updates storage)
+      this.editor.commands.setSearchTerm(searchText);
+      
+      // Set case sensitivity
+      this.editor.commands.setCaseSensitive(caseSensitive);
+      
+      // Reset index to start from beginning
+      this.editor.commands.resetIndex();
+      
+      // Set replace term
+      this.editor.commands.setReplaceTerm(replaceText);
+      
+      // Trigger a state update by dispatching an empty transaction
+      // This ensures the search plugin's apply() method runs and populates results
+      const { state, dispatch } = this.editor.view;
+      const tr = state.tr;
+      dispatch(tr);
+      
+      // Now check for results (plugin should have processed by now)
+      const results = this.editor.storage?.searchAndReplace?.results || [];
+      
+      if (results.length === 0) {
+        console.warn('[ToolExecutor] findAndReplace: No matches found for search text:', searchText);
+        // Try again after a brief delay in case plugin needs more time
+        setTimeout(() => {
+          const retryResults = this.editor.storage?.searchAndReplace?.results || [];
+          if (retryResults.length > 0) {
+            if (replaceAll) {
+              this.editor.commands.replaceAll();
+            } else {
+              this.editor.commands.replace();
+            }
+          }
+        }, 10);
+        return false;
+      }
+      
+      console.log(`[ToolExecutor] findAndReplace: Found ${results.length} match(es) for "${searchText}"`);
+      
+      if (replaceAll) {
+        // Replace all matches
+        const success = this.editor.commands.replaceAll();
+        if (success) {
+          console.log(`[ToolExecutor] findAndReplace: Successfully replaced ${results.length} occurrence(s)`);
+        } else {
+          console.warn('[ToolExecutor] findAndReplace: replaceAll() returned false');
+        }
+        return success;
+      } else {
+        // Replace current match (at resultIndex 0 after reset)
+        const success = this.editor.commands.replace();
+        if (success) {
+          console.log('[ToolExecutor] findAndReplace: Successfully replaced 1 occurrence');
+        } else {
+          console.warn('[ToolExecutor] findAndReplace: replace() returned false');
+        }
+        return success;
+      }
+    } catch (error) {
+      console.error('[ToolExecutor] Error in find and replace:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Apply formatting (marks) to text in the document
+   */
+  private applyFormatting(params: ApplyFormattingTool['params']): boolean {
+    const { format, range, attrs } = params;
+
+    if (!format) {
+      console.warn('[ToolExecutor] applyFormatting: Format is required');
+      return false;
+    }
+
+    try {
+      // If range is provided, set text selection to that range
+      if (range) {
+        const { from, to } = range;
+        if (from >= to) {
+          console.warn('[ToolExecutor] applyFormatting: Invalid range, from must be less than to');
+          return false;
+        }
+        this.editor.commands.setTextSelection({ from, to });
+      }
+
+      // Apply formatting based on type
+      switch (format) {
+        case 'bold':
+          return this.editor.commands.setMark('bold');
+        case 'italic':
+          return this.editor.commands.setMark('italic');
+        case 'underline':
+          return this.editor.commands.setMark('underline');
+        case 'strike':
+          return this.editor.commands.setMark('strike');
+        case 'code':
+          return this.editor.commands.setMark('code');
+        case 'link':
+          if (!attrs?.href) {
+            console.warn('[ToolExecutor] applyFormatting: href is required for link format');
+            return false;
+          }
+          return this.editor.commands.setLink({ href: attrs.href });
+        default:
+          console.warn('[ToolExecutor] applyFormatting: Unknown format:', format);
+          return false;
+      }
+    } catch (error) {
+      console.error('[ToolExecutor] Error applying formatting:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Clear all formatting (marks) from text in the document
+   */
+  private clearFormatting(params: ClearFormattingTool['params']): boolean {
+    const { range } = params;
+
+    try {
+      // If range is provided, set text selection to that range
+      if (range) {
+        const { from, to } = range;
+        if (from >= to) {
+          console.warn('[ToolExecutor] clearFormatting: Invalid range, from must be less than to');
+          return false;
+        }
+        this.editor.commands.setTextSelection({ from, to });
+      }
+
+      // Clear all marks from the selection
+      // Use unsetAllMarks command if available, otherwise manually remove marks
+      const { state, dispatch } = this.editor.view;
+      const { from, to } = state.selection;
+
+      if (from === to) {
+        // No selection, nothing to clear
+        console.warn('[ToolExecutor] clearFormatting: No selection to clear formatting from');
+        return false;
+      }
+
+      const tr = state.tr;
+      
+      // Remove all marks from the selected range
+      state.doc.nodesBetween(from, to, (node, pos) => {
+        if (node.isText && node.marks.length > 0) {
+          const nodeFrom = Math.max(from, pos);
+          const nodeTo = Math.min(to, pos + node.nodeSize);
+          // Remove all marks from this text node
+          node.marks.forEach(mark => {
+            tr.removeMark(nodeFrom, nodeTo, mark.type);
+          });
+        }
+      });
+
+      if (dispatch) {
+        dispatch(tr);
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      console.error('[ToolExecutor] Error clearing formatting:', error);
+      return false;
     }
   }
 }

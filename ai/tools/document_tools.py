@@ -622,6 +622,167 @@ def replace_range_handler(arguments: Dict[str, Any], context: Dict[str, Any]) ->
         return {"error": error_msg}
 
 
+def find_and_replace_handler(arguments: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handler for find_and_replace tool
+    
+    This is a WRITE operation that will be returned as a toolCall to the frontend.
+    The frontend will execute the find and replace using editor commands.
+    
+    Arguments:
+        - searchText: Text to find (required)
+        - replaceText: Text to replace with (required)
+        - replaceAll: Whether to replace all occurrences (default: False)
+        - caseSensitive: Whether search is case sensitive (default: False)
+    
+    Context (automatically provided):
+        - workspaceId: Current workspace ID
+        - userId: Current user ID
+        - pageId: Current page ID (if available)
+    """
+    start_time = datetime.now()
+    logger.info("-" * 80)
+    logger.info("[TOOL: find_and_replace] Starting find and replace operation")
+    
+    try:
+        args_str = json.dumps(arguments, indent=2, default=str)
+        logger.info(f"[TOOL: find_and_replace] Arguments: {args_str}")
+    except (TypeError, ValueError):
+        logger.info(f"[TOOL: find_and_replace] Arguments: {str(arguments)}")
+    logger.info(f"[TOOL: find_and_replace] Context: workspace={context.get('workspaceId')}, user={context.get('userId')}, page={context.get('pageId')}")
+    
+    search_text = arguments.get("searchText")
+    replace_text = arguments.get("replaceText")
+    
+    if not search_text:
+        error_msg = "searchText is required"
+        logger.error(f"[TOOL: find_and_replace] ERROR: {error_msg}")
+        return {"error": error_msg}
+    
+    if replace_text is None:
+        error_msg = "replaceText is required"
+        logger.error(f"[TOOL: find_and_replace] ERROR: {error_msg}")
+        return {"error": error_msg}
+    
+    replace_all = arguments.get("replaceAll", False)
+    case_sensitive = arguments.get("caseSensitive", False)
+    
+    logger.info(f"[TOOL: find_and_replace] Search text: '{search_text}'")
+    logger.info(f"[TOOL: find_and_replace] Replace text: '{replace_text}'")
+    logger.info(f"[TOOL: find_and_replace] Replace all: {replace_all}")
+    logger.info(f"[TOOL: find_and_replace] Case sensitive: {case_sensitive}")
+    
+    # This is a write operation, so it will be collected as a toolCall in main.py
+    # Return success response (the actual execution happens in frontend)
+    total_duration = (datetime.now() - start_time).total_seconds()
+    logger.info(f"[TOOL: find_and_replace] Operation prepared in {total_duration:.2f}s")
+    logger.info("-" * 80)
+    
+    return {
+        "success": True,
+        "message": "Find and replace operation prepared for frontend execution"
+    }
+
+
+def apply_formatting_handler(arguments: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handler for apply_formatting tool
+    
+    This is a WRITE operation that will be returned as a toolCall to the frontend.
+    The frontend will execute the formatting using editor commands.
+    
+    Arguments:
+        - format: Format to apply - 'bold', 'italic', 'underline', 'strike', 'code', or 'link' (required)
+        - range: Optional range object with 'from' and 'to' character positions. If not provided, uses current selection.
+        - attrs: Optional attributes (e.g., { href: string } for links)
+    
+    Context (automatically provided):
+        - workspaceId: Current workspace ID
+        - userId: Current user ID
+        - pageId: Current page ID (if available)
+    """
+    start_time = datetime.now()
+    logger.info("-" * 80)
+    logger.info("[TOOL: apply_formatting] Starting apply formatting operation")
+    
+    try:
+        args_str = json.dumps(arguments, indent=2, default=str)
+        logger.info(f"[TOOL: apply_formatting] Arguments: {args_str}")
+    except (TypeError, ValueError):
+        logger.info(f"[TOOL: apply_formatting] Arguments: {str(arguments)}")
+    logger.info(f"[TOOL: apply_formatting] Context: workspace={context.get('workspaceId')}, user={context.get('userId')}, page={context.get('pageId')}")
+    
+    format_type = arguments.get("format")
+    if not format_type:
+        error_msg = "format is required"
+        logger.error(f"[TOOL: apply_formatting] ERROR: {error_msg}")
+        return {"error": error_msg}
+    
+    valid_formats = ["bold", "italic", "underline", "strike", "code", "link"]
+    if format_type not in valid_formats:
+        error_msg = f"format must be one of: {', '.join(valid_formats)}"
+        logger.error(f"[TOOL: apply_formatting] ERROR: {error_msg}")
+        return {"error": error_msg}
+    
+    range_obj = arguments.get("range")
+    attrs = arguments.get("attrs", {})
+    
+    logger.info(f"[TOOL: apply_formatting] Format: {format_type}")
+    logger.info(f"[TOOL: apply_formatting] Range: {range_obj}")
+    logger.info(f"[TOOL: apply_formatting] Attrs: {attrs}")
+    
+    # This is a write operation, so it will be collected as a toolCall in main.py
+    total_duration = (datetime.now() - start_time).total_seconds()
+    logger.info(f"[TOOL: apply_formatting] Operation prepared in {total_duration:.2f}s")
+    logger.info("-" * 80)
+    
+    return {
+        "success": True,
+        "message": "Apply formatting operation prepared for frontend execution"
+    }
+
+
+def clear_formatting_handler(arguments: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handler for clear_formatting tool
+    
+    This is a WRITE operation that will be returned as a toolCall to the frontend.
+    The frontend will execute the formatting clear using editor commands.
+    
+    Arguments:
+        - range: Optional range object with 'from' and 'to' character positions. If not provided, uses current selection.
+    
+    Context (automatically provided):
+        - workspaceId: Current workspace ID
+        - userId: Current user ID
+        - pageId: Current page ID (if available)
+    """
+    start_time = datetime.now()
+    logger.info("-" * 80)
+    logger.info("[TOOL: clear_formatting] Starting clear formatting operation")
+    
+    try:
+        args_str = json.dumps(arguments, indent=2, default=str)
+        logger.info(f"[TOOL: clear_formatting] Arguments: {args_str}")
+    except (TypeError, ValueError):
+        logger.info(f"[TOOL: clear_formatting] Arguments: {str(arguments)}")
+    logger.info(f"[TOOL: clear_formatting] Context: workspace={context.get('workspaceId')}, user={context.get('userId')}, page={context.get('pageId')}")
+    
+    range_obj = arguments.get("range")
+    
+    logger.info(f"[TOOL: clear_formatting] Range: {range_obj}")
+    
+    # This is a write operation, so it will be collected as a toolCall in main.py
+    total_duration = (datetime.now() - start_time).total_seconds()
+    logger.info(f"[TOOL: clear_formatting] Operation prepared in {total_duration:.2f}s")
+    logger.info("-" * 80)
+    
+    return {
+        "success": True,
+        "message": "Clear formatting operation prepared for frontend execution"
+    }
+
+
 # Register document reading tool
 def register_document_tools(registry: ToolRegistry):
     """Register all document-related tools"""
@@ -742,8 +903,105 @@ def register_document_tools(registry: ToolRegistry):
         handler=replace_range_handler
     )
     
+    find_and_replace_tool = ToolDefinition(
+        name="find_and_replace",
+        description="Find and replace text in a document/page. Searches for a text pattern and replaces it with new text. Can replace all occurrences or just the current match. Supports case-sensitive and case-insensitive searches.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "searchText": {
+                    "type": "string",
+                    "description": "The text to search for. This is the pattern that will be found and replaced."
+                },
+                "replaceText": {
+                    "type": "string",
+                    "description": "The text to replace the search pattern with."
+                },
+                "replaceAll": {
+                    "type": "boolean",
+                    "description": "Whether to replace all occurrences of the search text. If false, only the current match will be replaced. Defaults to false if not specified."
+                },
+                "caseSensitive": {
+                    "type": "boolean",
+                    "description": "Whether the search should be case-sensitive. If true, 'API' and 'api' are treated as different. Defaults to false if not specified."
+                }
+            },
+            "required": ["searchText", "replaceText"]
+        },
+        handler=find_and_replace_handler
+    )
+    
+    apply_formatting_tool = ToolDefinition(
+        name="apply_formatting",
+        description="Apply formatting (marks) to text in a document/page. Can apply bold, italic, underline, strikethrough, code, or link formatting to a specific range or current selection. Use this when the user wants to format specific text, e.g., 'make this bold' or 'add a link here'.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "format": {
+                    "type": "string",
+                    "enum": ["bold", "italic", "underline", "strike", "code", "link"],
+                    "description": "The format to apply. 'bold' for bold text, 'italic' for italic, 'underline' for underlined, 'strike' for strikethrough, 'code' for inline code, 'link' for hyperlink."
+                },
+                "range": {
+                    "type": "object",
+                    "properties": {
+                        "from": {
+                            "type": "number",
+                            "description": "Start character position (0-based). Must be less than 'to'."
+                        },
+                        "to": {
+                            "type": "number",
+                            "description": "End character position (0-based). Must be greater than 'from'."
+                        }
+                    },
+                    "description": "Optional range to apply formatting to. If not provided, formatting is applied to the current selection."
+                },
+                "attrs": {
+                    "type": "object",
+                    "properties": {
+                        "href": {
+                            "type": "string",
+                            "description": "URL for link format. Required when format is 'link'."
+                        }
+                    },
+                    "description": "Optional attributes. For 'link' format, must include 'href' with the URL."
+                }
+            },
+            "required": ["format"]
+        },
+        handler=apply_formatting_handler
+    )
+    
+    clear_formatting_tool = ToolDefinition(
+        name="clear_formatting",
+        description="Clear all formatting (marks) from text in a document/page. Removes all formatting like bold, italic, underline, strikethrough, code, and links from a specific range or current selection. Use this when the user wants to remove all formatting from text.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "range": {
+                    "type": "object",
+                    "properties": {
+                        "from": {
+                            "type": "number",
+                            "description": "Start character position (0-based). Must be less than 'to'."
+                        },
+                        "to": {
+                            "type": "number",
+                            "description": "End character position (0-based). Must be greater than 'from'."
+                        }
+                    },
+                    "description": "Optional range to clear formatting from. If not provided, formatting is cleared from the current selection."
+                }
+            }
+        },
+        handler=clear_formatting_handler
+    )
+    
     registry.register(read_document_tool)
     registry.register(replace_document_tool)
     registry.register(insert_content_tool)
     registry.register(replace_range_tool)
+    registry.register(find_and_replace_tool)
+    registry.register(apply_formatting_tool)
+    registry.register(clear_formatting_tool)
 

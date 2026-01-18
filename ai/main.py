@@ -391,7 +391,7 @@ async def chat(
                             # Determine if this is a write operation (should be returned as toolCall)
                             # Read operations (read_document) are executed here
                             # Write operations are returned to frontend for execution
-                            write_tools = ["insert_content", "replace_document", "replace_range"]
+                            write_tools = ["insert_content", "replace_document", "replace_range", "find_and_replace", "apply_formatting", "clear_formatting"]
                             is_write_operation = function_name in write_tools
                             
                             if is_write_operation:
@@ -422,6 +422,32 @@ async def chat(
                                     # But we need to keep it as a separate tool or map it differently
                                     # For now, we'll keep it as replace_range and handle it in frontend
                                     pass
+                                elif function_name == "find_and_replace":
+                                    # find_and_replace is already in the correct format
+                                    # Default replaceAll to True if not specified (more intuitive for bulk replacements)
+                                    # Only set to False if explicitly requested
+                                    replace_all = function_args.get("replaceAll")
+                                    if replace_all is None:
+                                        replace_all = True  # Default to True for better UX
+                                    
+                                    tool_call["params"] = {
+                                        "searchText": function_args.get("searchText", ""),
+                                        "replaceText": function_args.get("replaceText", ""),
+                                        "replaceAll": replace_all,
+                                        "caseSensitive": function_args.get("caseSensitive", False)
+                                    }
+                                elif function_name == "apply_formatting":
+                                    # Ensure all params are included
+                                    tool_call["params"] = {
+                                        "format": function_args.get("format", ""),
+                                        "range": function_args.get("range"),
+                                        "attrs": function_args.get("attrs")
+                                    }
+                                elif function_name == "clear_formatting":
+                                    # Ensure range is included if provided
+                                    tool_call["params"] = {
+                                        "range": function_args.get("range")
+                                    }
                                 
                                 tool_calls_for_frontend.append(tool_call)
                                 logger.info(f"[TOOL EXECUTION] Added toolCall to frontend list: {tool_call}")

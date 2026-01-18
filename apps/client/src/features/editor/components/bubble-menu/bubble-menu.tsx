@@ -28,6 +28,7 @@ import { useAtom } from "jotai";
 import { v7 as uuid7 } from "uuid";
 import { isCellSelection, isTextSelected } from "@docmost/editor-ext";
 import { LinkSelector } from "@/features/editor/components/bubble-menu/link-selector.tsx";
+import { AiSelector } from "@/features/editor/components/bubble-menu/ai-selector.tsx";
 import { useTranslation } from "react-i18next";
 
 export interface BubbleMenuItem {
@@ -146,6 +147,7 @@ export const EditorBubbleMenu: FC<EditorBubbleMenuProps> = (props) => {
         setIsTextAlignmentOpen(false);
         setIsLinkSelectorOpen(false);
         setIsColorSelectorOpen(false);
+        setIsAiSelectorOpen(false);
       },
     },
   };
@@ -154,6 +156,7 @@ export const EditorBubbleMenu: FC<EditorBubbleMenuProps> = (props) => {
   const [isTextAlignmentSelectorOpen, setIsTextAlignmentOpen] = useState(false);
   const [isLinkSelectorOpen, setIsLinkSelectorOpen] = useState(false);
   const [isColorSelectorOpen, setIsColorSelectorOpen] = useState(false);
+  const [isAiSelectorOpen, setIsAiSelectorOpen] = useState(false);
 
   return (
     <BubbleMenu {...bubbleMenuProps}>
@@ -166,6 +169,7 @@ export const EditorBubbleMenu: FC<EditorBubbleMenuProps> = (props) => {
             setIsTextAlignmentOpen(false);
             setIsLinkSelectorOpen(false);
             setIsColorSelectorOpen(false);
+            setIsAiSelectorOpen(false);
           }}
         />
 
@@ -177,6 +181,7 @@ export const EditorBubbleMenu: FC<EditorBubbleMenuProps> = (props) => {
             setIsNodeSelectorOpen(false);
             setIsLinkSelectorOpen(false);
             setIsColorSelectorOpen(false);
+            setIsAiSelectorOpen(false);
           }}
         />
 
@@ -207,6 +212,7 @@ export const EditorBubbleMenu: FC<EditorBubbleMenuProps> = (props) => {
             setIsNodeSelectorOpen(false);
             setIsTextAlignmentOpen(false);
             setIsColorSelectorOpen(false);
+            setIsAiSelectorOpen(false);
           }}
         />
 
@@ -218,6 +224,19 @@ export const EditorBubbleMenu: FC<EditorBubbleMenuProps> = (props) => {
             setIsNodeSelectorOpen(false);
             setIsTextAlignmentOpen(false);
             setIsLinkSelectorOpen(false);
+            setIsAiSelectorOpen(false);
+          }}
+        />
+
+        <AiSelector
+          editor={props.editor}
+          isOpen={isAiSelectorOpen}
+          setIsOpen={(value) => {
+            setIsAiSelectorOpen(typeof value === "boolean" ? value : !isAiSelectorOpen);
+            setIsNodeSelectorOpen(false);
+            setIsTextAlignmentOpen(false);
+            setIsLinkSelectorOpen(false);
+            setIsColorSelectorOpen(false);
           }}
         />
 

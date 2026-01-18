@@ -149,16 +149,24 @@ export const AiSidebar: FC<AiSidebarProps> = (props) => {
       }
 
       // Extract message content - handle both string and AiChatResponse types
-      // If toolCalls were executed successfully, show a success message instead of fallback
+      // Priority: toolCalls > message > fallback
       let messageContent: string;
       if (typeof responseData === 'string') {
         messageContent = responseData;
+      } else if (responseData?.toolCalls && responseData.toolCalls.length > 0) {
+        // If toolCalls exist, show success message (regardless of whether they executed)
+        // This handles cases where AI returns toolCalls but no text message
+        if (toolCallsExecuted) {
+          messageContent = `I've ${responseData.toolCalls.length === 1 ? 'completed the action' : `completed ${responseData.toolCalls.length} actions`} on your page.`;
+        } else {
+          // ToolCalls exist but execution failed - still acknowledge the attempt
+          messageContent = `I attempted to ${responseData.toolCalls.length === 1 ? 'perform the action' : `perform ${responseData.toolCalls.length} actions`}, but encountered an issue.`;
+        }
       } else if (responseData?.message) {
+        // Show AI's text message if no toolCalls
         messageContent = responseData.message;
-      } else if (toolCallsExecuted && responseData?.toolCalls && responseData.toolCalls.length > 0) {
-        // Show success message when toolCalls were executed
-        messageContent = `I've ${responseData.toolCalls.length === 1 ? 'completed the action' : `completed ${responseData.toolCalls.length} actions`} on your page.`;
       } else {
+        // Fallback only if no toolCalls and no message
         messageContent = "Sorry, I couldn't generate a response.";
       }
 

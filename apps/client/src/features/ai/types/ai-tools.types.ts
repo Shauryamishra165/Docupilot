@@ -10,7 +10,10 @@ export type AiToolCall =
   | ReplaceContentTool
   | DeleteContentTool
   | FormatTextTool
-  | InsertBlockTool;
+  | InsertBlockTool
+  | FindAndReplaceTool
+  | ApplyFormattingTool
+  | ClearFormattingTool;
 
 export interface InsertContentTool {
   tool: 'insert_content';
@@ -50,6 +53,32 @@ export interface InsertBlockTool {
     content: string;
     attrs?: Record<string, any>; // e.g., { level: 2 } for heading, { type: 'info' } for callout
     position: 'start' | 'end' | 'cursor';
+  };
+}
+
+export interface FindAndReplaceTool {
+  tool: 'find_and_replace';
+  params: {
+    searchText: string;
+    replaceText: string;
+    replaceAll?: boolean;
+    caseSensitive?: boolean;
+  };
+}
+
+export interface ApplyFormattingTool {
+  tool: 'apply_formatting';
+  params: {
+    format: 'bold' | 'italic' | 'underline' | 'strike' | 'code' | 'link';
+    range?: { from: number; to: number };
+    attrs?: { href?: string };
+  };
+}
+
+export interface ClearFormattingTool {
+  tool: 'clear_formatting';
+  params: {
+    range?: { from: number; to: number };
   };
 }
 

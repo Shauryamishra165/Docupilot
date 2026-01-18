@@ -32,6 +32,7 @@ export interface IUserSettings {
   preferences: {
     fullPageWidth: boolean;
     pageEditMode: string;
+    enabledAiFeatures?: string[];
   };
 }
 
