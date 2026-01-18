@@ -108,8 +108,9 @@ export class AiChatService {
       );
 
       return {
-        message: data.message || 'No response from AI service',
+        message: data.message || undefined, // Can be undefined if only toolCalls are present
         success: data.success !== false,
+        toolCalls: data.toolCalls || undefined, // Forward toolCalls from AI service
       };
     } catch (error: any) {
       if (error?.name === 'AbortError' || error?.name === 'TimeoutError') {

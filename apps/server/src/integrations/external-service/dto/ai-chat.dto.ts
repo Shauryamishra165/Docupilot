@@ -23,7 +23,8 @@ export class AiChatRequestDto {
 }
 
 export class AiChatResponseDto {
-  message: string;
+  message?: string; // Optional - may be empty if only toolCalls are present
   success: boolean;
+  toolCalls?: any[]; // Optional - tool calls for frontend execution
 }
 

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import os
 import json
 import uuid
@@ -87,9 +87,10 @@ class ChatRequest(BaseModel):
     pageId: Optional[str] = None  # Current page ID (optional, for context)
 
 class ChatResponse(BaseModel):
-    message: str
+    message: Optional[str] = None  # AI's text response (optional if toolCalls are present)
     success: bool = True
     chatId: Optional[str] = None
+    toolCalls: Optional[List[Dict[str, Any]]] = None  # Tool calls to execute in frontend
 
 class ChatHistoryItem(BaseModel):
     id: str
@@ -295,10 +296,14 @@ async def chat(
             response_text = ""
         
         # Handle function calls if any
+        # Write tools will be returned as toolCalls for frontend execution
+        # Read tools will be executed here (read_document)
         final_response_text = response_text
         function_calls_processed = []
+        tool_calls_for_frontend = []  # Write operations to return to frontend
         max_iterations = 5  # Prevent infinite loops
         iteration = 0
+        has_read_tools_executed = False  # Track if any read tools were executed
         
         # Check if response contains function calls
         # Note: Function calling may not work with google-generativeai 0.3.2
@@ -383,7 +388,51 @@ async def chat(
                                 logger.info(f"[TOOL EXECUTION] Function arguments: {str(function_args)}")
                             logger.info(f"[TOOL EXECUTION] Context: workspace={context.get('workspaceId')}, user={context.get('userId')}, page={context.get('pageId')}")
                             
-                            # Execute tool
+                            # Determine if this is a write operation (should be returned as toolCall)
+                            # Read operations (read_document) are executed here
+                            # Write operations are returned to frontend for execution
+                            write_tools = ["insert_content", "replace_document", "replace_range"]
+                            is_write_operation = function_name in write_tools
+                            
+                            if is_write_operation:
+                                # For write operations, collect as toolCall for frontend execution
+                                logger.info(f"[TOOL EXECUTION] Write operation detected: {function_name} - collecting as toolCall for frontend")
+                                
+                                # Convert to frontend-compatible toolCall format
+                                tool_call = {
+                                    "tool": function_name,
+                                    "params": function_args
+                                }
+                                
+                                # Map tool names to frontend format if needed
+                                if function_name == "replace_document":
+                                    tool_call["tool"] = "replace_content"
+                                    tool_call["params"] = {
+                                        "content": function_args.get("content", ""),
+                                        "target": "all"
+                                    }
+                                elif function_name == "insert_content":
+                                    # Ensure position is included (default to 'cursor' if not provided)
+                                    tool_call["params"] = {
+                                        "content": function_args.get("content", ""),
+                                        "position": function_args.get("position", "cursor")  # Default to 'cursor' if not specified
+                                    }
+                                elif function_name == "replace_range":
+                                    # Replace range can be mapped to replace_content with selection
+                                    # But we need to keep it as a separate tool or map it differently
+                                    # For now, we'll keep it as replace_range and handle it in frontend
+                                    pass
+                                
+                                tool_calls_for_frontend.append(tool_call)
+                                logger.info(f"[TOOL EXECUTION] Added toolCall to frontend list: {tool_call}")
+                                
+                                # Don't execute write tools - just collect them
+                                # Continue to next part/function call in this response
+                                function_call_found = True
+                                continue  # Continue to next part, not break
+                            
+                            # Execute read tools (e.g., read_document)
+                            has_read_tools_executed = True  # Mark that we're executing a read tool
                             tool_start_time = datetime.now()
                             tool_result = tool_registry.execute_tool(function_name, function_args, context)
                             tool_duration = (datetime.now() - tool_start_time).total_seconds()
@@ -433,9 +482,14 @@ async def chat(
                                 logger.warning(f"[LLM] Error: {tool_result.get('error', 'Unknown error')}")
                             break
             
+            # Break if no function calls found, or if we only have write tools (no read tools to execute)
             if not function_call_found:
                 if iteration == 1:
                     logger.info("[LLM] No function calls detected in response (this is normal with current API version)")
+                break
+            elif function_call_found and not has_read_tools_executed:
+                # We found write tools but no read tools - break since we're just collecting toolCalls
+                logger.info("[LLM] Only write tools detected - collecting as toolCalls for frontend, no need to continue loop")
                 break
         
         if iteration >= max_iterations:
@@ -461,11 +515,19 @@ async def chat(
             save_chat_history(chat_id, all_messages, x_workspace_id, x_user_id)
             logger.info(f"[CHAT HISTORY] Chat history saved with ID: {chat_id}")
         
-        return ChatResponse(
-            message=final_response_text,
-            success=True,
-            chatId=chat_id
-        )
+        # Prepare response with toolCalls if any
+        response_data = {
+            "message": final_response_text if final_response_text else None,
+            "success": True,
+            "chatId": chat_id
+        }
+        
+        # Include toolCalls if any were collected
+        if tool_calls_for_frontend:
+            response_data["toolCalls"] = tool_calls_for_frontend
+            logger.info(f"[CHAT COMPLETE] Returning {len(tool_calls_for_frontend)} tool call(s) to frontend")
+        
+        return ChatResponse(**response_data)
     except HTTPException:
         raise
     except Exception as e:

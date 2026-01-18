@@ -23,14 +23,6 @@ import {
   DocumentReadRequestDto,
   DocumentReadResponseDto,
 } from './dto/document-read.dto';
-import {
-  ReplaceDocumentRequestDto,
-  ReplaceDocumentResponseDto,
-  InsertContentRequestDto,
-  InsertContentResponseDto,
-  ReplaceRangeRequestDto,
-  ReplaceRangeResponseDto,
-} from './dto/document-write.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('external-service/ai/document')
@@ -85,68 +77,6 @@ export class DocumentController {
     return this.documentService.readDocument(dto, workspace, user.id);
   }
 
-  /**
-   * Replace entire document content
-   * POST /api/external-service/ai/document/replace
-   */
-  @Post('replace')
-  @HttpCode(HttpStatus.OK)
-  async replaceDocument(
-    @Body() dto: ReplaceDocumentRequestDto,
-    @AuthUser() user: User,
-    @AuthWorkspace() workspace: Workspace,
-  ): Promise<ReplaceDocumentResponseDto> {
-    this.checkPermission(user, workspace, WorkspaceCaslAction.Manage);
-    await this.rateLimiterService.checkRateLimit(user.id, workspace.id, 30, 60000);
-
-    this.logger.log(
-      `User ${user.id} replacing document ${dto.pageId} (workspace: ${workspace.id})`,
-    );
-
-    return this.documentService.replaceDocument(dto, workspace, user.id);
-  }
-
-  /**
-   * Insert content at specified position
-   * POST /api/external-service/ai/document/insert
-   */
-  @Post('insert')
-  @HttpCode(HttpStatus.OK)
-  async insertContent(
-    @Body() dto: InsertContentRequestDto,
-    @AuthUser() user: User,
-    @AuthWorkspace() workspace: Workspace,
-  ): Promise<InsertContentResponseDto> {
-    this.checkPermission(user, workspace, WorkspaceCaslAction.Manage);
-    await this.rateLimiterService.checkRateLimit(user.id, workspace.id, 30, 60000);
-
-    this.logger.log(
-      `User ${user.id} inserting content into document ${dto.pageId} (workspace: ${workspace.id}, position: ${dto.position || 'end'})`,
-    );
-
-    return this.documentService.insertContent(dto, workspace, user.id);
-  }
-
-  /**
-   * Replace content in a specific range
-   * POST /api/external-service/ai/document/replace-range
-   */
-  @Post('replace-range')
-  @HttpCode(HttpStatus.OK)
-  async replaceRange(
-    @Body() dto: ReplaceRangeRequestDto,
-    @AuthUser() user: User,
-    @AuthWorkspace() workspace: Workspace,
-  ): Promise<ReplaceRangeResponseDto> {
-    this.checkPermission(user, workspace, WorkspaceCaslAction.Manage);
-    await this.rateLimiterService.checkRateLimit(user.id, workspace.id, 30, 60000);
-
-    this.logger.log(
-      `User ${user.id} replacing range in document ${dto.pageId} (workspace: ${workspace.id}, from: ${dto.from}, to: ${dto.to})`,
-    );
-
-    return this.documentService.replaceRange(dto, workspace, user.id);
-  }
 
   /**
    * Shared permission check

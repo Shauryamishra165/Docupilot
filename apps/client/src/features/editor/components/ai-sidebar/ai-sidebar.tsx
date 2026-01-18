@@ -1,4 +1,4 @@
-import React, { FC, useState, useRef, useEffect } from "react";
+import React, { FC, useState, useRef, useEffect, useMemo } from "react";
 import { Box, Text, Textarea, ActionIcon, ScrollArea, Group, Modal, Button, Stack, Divider } from "@mantine/core";
 import { IconSend, IconSparkles, IconHistory, IconTrash } from "@tabler/icons-react";
 import { useDisclosure } from "@mantine/hooks";
@@ -10,6 +10,8 @@ import classes from "./ai-sidebar.module.css";
 import clsx from "clsx";
 import { useParams } from "react-router-dom";
 import { extractPageSlugId } from "@/lib";
+import { ToolExecutor } from "@/features/ai/services/tool-executor";
+import type { AiChatResponse } from "@/features/ai/types/ai-tools.types";
 
 type Message = {
   id: string;
@@ -23,6 +25,7 @@ type AiSidebarProps = {
 };
 
 export const AiSidebar: FC<AiSidebarProps> = (props) => {
+  const { editor } = props;
   const { t } = useTranslation();
   const { pageSlug } = useParams();
   const pageId = pageSlug ? extractPageSlugId(pageSlug) : undefined;
@@ -34,6 +37,19 @@ export const AiSidebar: FC<AiSidebarProps> = (props) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Create ToolExecutor instance when editor is available
+  const toolExecutor = useMemo(() => {
+    if (!editor) {
+      return null;
+    }
+    try {
+      return new ToolExecutor(editor);
+    } catch (error) {
+      console.error("[AiSidebar] Failed to create ToolExecutor:", error);
+      return null;
+    }
+  }, [editor]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -108,15 +124,48 @@ export const AiSidebar: FC<AiSidebarProps> = (props) => {
       // Call backend AI chat endpoint (which will route to AI service)
       // Uses JWT authentication automatically via api client
       // Pass pageId if available so AI knows which document we're working with
-      const response = await api.post("/external-service/ai/chat", {
+      const response = await api.post<AiChatResponse>("/external-service/ai/chat", {
         messages: apiMessages,
         ...(pageId && { pageId }), // Include pageId if available
       });
 
+      // Handle response - it can be either string or AiChatResponse
+      const responseData = response.data as AiChatResponse | string;
+      
+      // Execute tool calls if present
+      let toolCallsExecuted = false;
+      if (typeof responseData === 'object' && responseData?.toolCalls && responseData.toolCalls.length > 0) {
+        if (!toolExecutor) {
+          console.error("[AiSidebar] ToolExecutor not available - editor instance missing");
+        } else {
+          console.log("[AiSidebar] Executing tool calls:", responseData.toolCalls);
+          const results = toolExecutor.executeMultiple(responseData.toolCalls);
+          toolCallsExecuted = results.some(result => result === true);
+          console.log("[AiSidebar] Tool execution results:", results);
+          if (!toolCallsExecuted) {
+            console.warn("[AiSidebar] Some or all tool calls failed to execute");
+          }
+        }
+      }
+
+      // Extract message content - handle both string and AiChatResponse types
+      // If toolCalls were executed successfully, show a success message instead of fallback
+      let messageContent: string;
+      if (typeof responseData === 'string') {
+        messageContent = responseData;
+      } else if (responseData?.message) {
+        messageContent = responseData.message;
+      } else if (toolCallsExecuted && responseData?.toolCalls && responseData.toolCalls.length > 0) {
+        // Show success message when toolCalls were executed
+        messageContent = `I've ${responseData.toolCalls.length === 1 ? 'completed the action' : `completed ${responseData.toolCalls.length} actions`} on your page.`;
+      } else {
+        messageContent = "Sorry, I couldn't generate a response.";
+      }
+
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: response.data?.message || response.data || "Sorry, I couldn't generate a response.",
+        content: messageContent,
         timestamp: new Date(),
       };
 

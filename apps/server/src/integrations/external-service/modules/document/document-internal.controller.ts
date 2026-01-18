@@ -13,14 +13,6 @@ import {
 import { ApiKeyAuthGuard } from '../../../../common/guards/api-key-auth.guard';
 import { DocumentService } from './document.service';
 import { DocumentReadRequestDto, DocumentReadResponseDto } from './dto/document-read.dto';
-import {
-  ReplaceDocumentRequestDto,
-  ReplaceDocumentResponseDto,
-  InsertContentRequestDto,
-  InsertContentResponseDto,
-  ReplaceRangeRequestDto,
-  ReplaceRangeResponseDto,
-} from './dto/document-write.dto';
 import { WorkspaceService } from '../../../../core/workspace/services/workspace.service';
 import { UserService } from '../../../../core/user/user.service';
 import { Workspace } from '@docmost/db/types/entity.types';
@@ -155,64 +147,5 @@ export class DocumentInternalController {
     return workspace;
   }
 
-  /**
-   * Internal endpoint for AI service to replace document content
-   * POST /api/internal/ai/document/replace
-   */
-  @Post('replace')
-  @HttpCode(HttpStatus.OK)
-  async replaceDocument(
-    @Body() dto: ReplaceDocumentRequestDto,
-    @Headers('x-workspace-id') workspaceId: string,
-    @Headers('x-user-id') userId: string,
-  ): Promise<ReplaceDocumentResponseDto> {
-    const workspace = await this.validateWorkspaceAndUser(workspaceId, userId);
-
-    this.logger.log(
-      `AI service replacing document ${dto.pageId} (workspace: ${workspaceId}, user: ${userId})`,
-    );
-
-    return this.documentService.replaceDocument(dto, workspace, userId);
-  }
-
-  /**
-   * Internal endpoint for AI service to insert content
-   * POST /api/internal/ai/document/insert
-   */
-  @Post('insert')
-  @HttpCode(HttpStatus.OK)
-  async insertContent(
-    @Body() dto: InsertContentRequestDto,
-    @Headers('x-workspace-id') workspaceId: string,
-    @Headers('x-user-id') userId: string,
-  ): Promise<InsertContentResponseDto> {
-    const workspace = await this.validateWorkspaceAndUser(workspaceId, userId);
-
-    this.logger.log(
-      `AI service inserting content into document ${dto.pageId} (workspace: ${workspaceId}, user: ${userId}, position: ${dto.position || 'end'})`,
-    );
-
-    return this.documentService.insertContent(dto, workspace, userId);
-  }
-
-  /**
-   * Internal endpoint for AI service to replace content range
-   * POST /api/internal/ai/document/replace-range
-   */
-  @Post('replace-range')
-  @HttpCode(HttpStatus.OK)
-  async replaceRange(
-    @Body() dto: ReplaceRangeRequestDto,
-    @Headers('x-workspace-id') workspaceId: string,
-    @Headers('x-user-id') userId: string,
-  ): Promise<ReplaceRangeResponseDto> {
-    const workspace = await this.validateWorkspaceAndUser(workspaceId, userId);
-
-    this.logger.log(
-      `AI service replacing range in document ${dto.pageId} (workspace: ${workspaceId}, user: ${userId}, from: ${dto.from}, to: ${dto.to})`,
-    );
-
-    return this.documentService.replaceRange(dto, workspace, userId);
-  }
 }
 
