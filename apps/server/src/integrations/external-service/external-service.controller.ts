@@ -16,6 +16,7 @@ import { AiChatService } from './ai-chat.service';
 import { RateLimiterService } from './rate-limiter.service';
 import { CallExternalServiceDto, ExternalServiceResponseDto } from './dto/call-external-service.dto';
 import { AiChatRequestDto, AiChatResponseDto } from './dto/ai-chat.dto';
+import { AiTextTransformRequestDto, AiTextTransformResponseDto } from './dto/ai-text-transform.dto';
 import { AuthUser } from '../../common/decorators/auth-user.decorator';
 import { AuthWorkspace } from '../../common/decorators/auth-workspace.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -185,6 +186,47 @@ export class ExternalServiceController {
     }
 
     return this.aiChatService.deleteChat(chatId, workspace, user.id);
+  }
+
+  /**
+   * AI Text Transform endpoint
+   * Used for improve, fix-grammar, change-tone commands
+   * Requires workspace edit permission
+   * Rate limited: 30 requests per minute per user/workspace
+   */
+  @HttpCode(HttpStatus.OK)
+  @Post('ai/text-transform')
+  async aiTextTransform(
+    @Body() dto: AiTextTransformRequestDto,
+    @AuthUser() user: User,
+    @AuthWorkspace() workspace: Workspace,
+  ): Promise<AiTextTransformResponseDto> {
+    // Check workspace permissions
+    const ability = this.workspaceAbility.createForUser(user, workspace);
+    if (ability.cannot(WorkspaceCaslAction.Edit, WorkspaceCaslSubject.Settings)) {
+      this.logger.warn(
+        `User ${user.id} attempted to use AI text transform without permission (workspace: ${workspace.id})`,
+      );
+      throw new ForbiddenException('Insufficient permissions to use AI text transform');
+    }
+
+    // Validate request
+    if (!dto.command) {
+      throw new ForbiddenException('Command is required');
+    }
+
+    if (!dto.blockTextWithBrackets || !dto.selectedText) {
+      throw new ForbiddenException('Block text and selected text are required');
+    }
+
+    // Check rate limit (30 requests per minute)
+    await this.rateLimiterService.checkRateLimit(user.id, workspace.id, 30, 60000);
+
+    this.logger.log(
+      `User ${user.id} using AI text transform (workspace: ${workspace.id}, command: ${dto.command})`,
+    );
+
+    return this.aiChatService.transformText(dto, workspace, user.id);
   }
 }
 

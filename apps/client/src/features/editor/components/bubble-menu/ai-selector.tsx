@@ -1,10 +1,12 @@
-import { Dispatch, FC, SetStateAction, useCallback } from "react";
-import { IconSparkles } from "@tabler/icons-react";
-import { ActionIcon, Popover, Tooltip, Stack, Button, rem } from "@mantine/core";
+import { Dispatch, FC, SetStateAction, useCallback, useState, useMemo } from "react";
+import { IconSparkles, IconLoader2 } from "@tabler/icons-react";
+import { ActionIcon, Popover, Tooltip, Stack, Button, rem, Text, Loader } from "@mantine/core";
 import { useEditor } from "@tiptap/react";
 import { useTranslation } from "react-i18next";
 import { useAtom } from "jotai";
 import { userAtom } from "@/features/user/atoms/current-user-atom.ts";
+import { notifications } from "@mantine/notifications";
+import { AiTransformService, AiCommandType } from "./ai-text-transform";
 
 interface AiSelectorProps {
   editor: ReturnType<typeof useEditor>;
@@ -13,7 +15,7 @@ interface AiSelectorProps {
 }
 
 export interface AiCommand {
-  id: string;
+  id: AiCommandType;
   label: string;
   enabled: boolean;
 }
@@ -31,6 +33,14 @@ export const AiSelector: FC<AiSelectorProps> = ({
 }) => {
   const { t } = useTranslation();
   const [user] = useAtom(userAtom);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [processingCommand, setProcessingCommand] = useState<AiCommandType | null>(null);
+
+  // Create the transform service instance
+  const transformService = useMemo(() => {
+    if (!editor) return null;
+    return new AiTransformService(editor);
+  }, [editor]);
 
   // Get enabled AI features from user settings
   const enabledAiFeatures =
@@ -47,21 +57,67 @@ export const AiSelector: FC<AiSelectorProps> = ({
   }
 
   const handleCommand = useCallback(
-    (commandId: string) => {
-      setIsOpen(false);
-      // Get selected text
-      const { from, to } = editor.state.selection;
-      const selectedText = editor.state.doc.textBetween(from, to);
-
-      if (!selectedText) {
+    async (commandId: AiCommandType) => {
+      if (!transformService || !editor) {
+        console.error('[AiSelector] No transform service or editor available');
         return;
       }
 
-      // TODO: This will be implemented later with API calls
-      // For now, just log the command
-      console.log(`AI Command: ${commandId}`, { selectedText });
+      // Check if there's a selection
+      const { from, to } = editor.state.selection;
+      const selectedText = editor.state.doc.textBetween(from, to);
+
+      if (!selectedText || selectedText.trim().length === 0) {
+        notifications.show({
+          title: t('No text selected'),
+          message: t('Please select some text to transform'),
+          color: 'yellow',
+        });
+        return;
+      }
+
+      // Close the popover
+      setIsOpen(false);
+
+      // Set processing state
+      setIsProcessing(true);
+      setProcessingCommand(commandId);
+
+      try {
+        console.log(`[AiSelector] Executing command: ${commandId}`);
+        console.log(`[AiSelector] Selected text: "${selectedText}"`);
+
+        // Execute the command
+        const result = await transformService.executeCommand(commandId);
+
+        if (result.success) {
+          notifications.show({
+            title: t('Text transformed'),
+            message: t('The selected text has been updated'),
+            color: 'green',
+          });
+          console.log('[AiSelector] Transform successful:', result);
+        } else {
+          notifications.show({
+            title: t('Transform failed'),
+            message: result.error || t('An error occurred while transforming the text'),
+            color: 'red',
+          });
+          console.error('[AiSelector] Transform failed:', result.error);
+        }
+      } catch (error) {
+        console.error('[AiSelector] Error executing command:', error);
+        notifications.show({
+          title: t('Error'),
+          message: error instanceof Error ? error.message : t('An unexpected error occurred'),
+          color: 'red',
+        });
+      } finally {
+        setIsProcessing(false);
+        setProcessingCommand(null);
+      }
     },
-    [editor, setIsOpen]
+    [editor, transformService, setIsOpen, t]
   );
 
   return (
@@ -82,33 +138,49 @@ export const AiSelector: FC<AiSelectorProps> = ({
               border: "none",
             }}
             onClick={() => setIsOpen(!isOpen)}
+            loading={isProcessing}
           >
-            <IconSparkles size={16} />
+            {isProcessing ? (
+              <Loader size={14} />
+            ) : (
+              <IconSparkles size={16} />
+            )}
           </ActionIcon>
         </Tooltip>
       </Popover.Target>
 
       <Popover.Dropdown>
         <Stack gap="xs">
-          {availableCommands.map((command) => (
-            <Button
-              key={command.id}
-              variant="subtle"
-              fullWidth
-              justify="flex-start"
-              onClick={() => handleCommand(command.id)}
-              style={{
-                height: rem(32),
-                paddingLeft: rem(12),
-                paddingRight: rem(12),
-              }}
-            >
-              {t(command.label)}
-            </Button>
-          ))}
+          {isProcessing ? (
+            <Stack align="center" gap="xs" py="md">
+              <Loader size="sm" />
+              <Text size="sm" c="dimmed">
+                {processingCommand === 'improve' && t('Improving...')}
+                {processingCommand === 'fix-grammar' && t('Fixing grammar...')}
+                {processingCommand === 'change-tone' && t('Changing tone...')}
+              </Text>
+            </Stack>
+          ) : (
+            availableCommands.map((command) => (
+              <Button
+                key={command.id}
+                variant="subtle"
+                fullWidth
+                justify="flex-start"
+                onClick={() => handleCommand(command.id)}
+                disabled={isProcessing}
+                style={{
+                  height: rem(32),
+                  paddingLeft: rem(12),
+                  paddingRight: rem(12),
+                }}
+              >
+                {t(command.label)}
+              </Button>
+            ))
+          )}
         </Stack>
       </Popover.Dropdown>
     </Popover>
   );
 };
-

@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 from tools.tool_registry import tool_registry
 from tools.document_tools import register_document_tools
+from text_transform import create_text_transform_endpoint
 
 # Configure logging
 logging.basicConfig(
@@ -721,6 +722,11 @@ async def read_document(
         logger.error(f"[DOCUMENT READ ERROR] Traceback:\n{traceback.format_exc()}")
         logger.error("=" * 80)
         raise HTTPException(status_code=500, detail=f"Error processing document: {error_msg}")
+
+
+# Register text transform endpoint
+create_text_transform_endpoint(app, model, verify_api_key)
+
 
 if __name__ == "__main__":
     import uvicorn

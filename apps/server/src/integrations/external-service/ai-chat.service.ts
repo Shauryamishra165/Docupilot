@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { EnvironmentService } from '../environment/environment.service';
 import { AiChatRequestDto, AiChatResponseDto } from './dto/ai-chat.dto';
+import { AiTextTransformRequestDto, AiTextTransformResponseDto } from './dto/ai-text-transform.dto';
 import { Workspace } from '@docmost/db/types/entity.types';
 
 @Injectable()
@@ -247,6 +248,103 @@ export class AiChatService {
     } catch (error: any) {
       this.logger.error('Error deleting chat', error);
       throw new ServiceUnavailableException('Failed to delete chat');
+    }
+  }
+
+  /**
+   * Send text transformation request to AI service
+   * Used for improve, fix-grammar, change-tone commands
+   */
+  async transformText(
+    request: AiTextTransformRequestDto,
+    workspace: Workspace,
+    userId: string,
+  ): Promise<AiTextTransformResponseDto> {
+    try {
+      const url = `${this.baseUrl}/api/text-transform`;
+
+      // Prepare headers with authentication
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'X-API-Key': this.apiKey,
+        'X-Workspace-Id': workspace.id,
+        'X-User-Id': userId,
+      };
+
+      // Prepare request body
+      const requestBody = {
+        command: request.command,
+        blockTextWithBrackets: request.blockTextWithBrackets,
+        selectedText: request.selectedText,
+        options: request.options,
+      };
+
+      // Prepare request
+      const requestOptions: RequestInit = {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(this.timeout),
+      };
+
+      this.logger.log(
+        `Sending AI text transform request (workspace: ${workspace.id}, user: ${userId}, command: ${request.command})`,
+      );
+
+      // Make the request
+      const response = await fetch(url, requestOptions);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        this.logger.error(
+          `AI text transform error: ${response.status} - ${errorText}`,
+        );
+        throw new ServiceUnavailableException(
+          `AI service returned error: ${response.statusText}`,
+        );
+      }
+
+      // Parse response
+      const data = await response.json();
+
+      this.logger.debug(
+        `AI text transform response received (workspace: ${workspace.id})`,
+      );
+
+      return {
+        success: data.success !== false,
+        transformedBlockText: data.transformedBlockText,
+        modifiedText: data.modifiedText,
+        error: data.error,
+      };
+    } catch (error: any) {
+      if (error?.name === 'AbortError' || error?.name === 'TimeoutError') {
+        this.logger.error(`AI text transform timeout after ${this.timeout}ms`);
+        throw new GatewayTimeoutException(
+          `AI service request timed out after ${this.timeout}ms`,
+        );
+      }
+
+      if (error instanceof ServiceUnavailableException) {
+        throw error;
+      }
+
+      // Network errors
+      if (
+        error?.message?.includes('fetch failed') ||
+        error?.code === 'ECONNREFUSED'
+      ) {
+        this.logger.error('AI service connection failed', error);
+        throw new ServiceUnavailableException(
+          'AI service is currently unavailable',
+        );
+      }
+
+      // Generic error
+      this.logger.error('AI text transform error', error);
+      throw new ServiceUnavailableException(
+        `Failed to communicate with AI service: ${error?.message || 'Unknown error'}`,
+      );
     }
   }
 }
