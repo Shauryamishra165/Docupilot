@@ -1,3 +1,8 @@
+/**
+ * Database Module for Cloud AI Server
+ * Self-contained with all required repos
+ */
+
 import {
   Global,
   Logger,
@@ -9,24 +14,13 @@ import { InjectKysely, KyselyModule } from 'nestjs-kysely';
 import { EnvironmentService } from '../integrations/environment/environment.service';
 import { CamelCasePlugin, LogEvent, PostgresDialect, sql } from 'kysely';
 import { Pool, types } from 'pg';
-import { GroupRepo } from '@docmost/db/repos/group/group.repo';
-import { WorkspaceRepo } from '@docmost/db/repos/workspace/workspace.repo';
-import { UserRepo } from '@docmost/db/repos/user/user.repo';
-import { GroupUserRepo } from '@docmost/db/repos/group/group-user.repo';
-import { SpaceRepo } from '@docmost/db/repos/space/space.repo';
-import { SpaceMemberRepo } from '@docmost/db/repos/space/space-member.repo';
+import { GroupRepo } from './repos/group/group.repo';
+import { SpaceRepo } from './repos/space/space.repo';
+import { SpaceMemberRepo } from './repos/space/space-member.repo';
 import { PageRepo } from './repos/page/page.repo';
-import { CommentRepo } from './repos/comment/comment.repo';
-import { PageHistoryRepo } from './repos/page/page-history.repo';
-import { AttachmentRepo } from './repos/attachment/attachment.repo';
-import { KyselyDB } from '@docmost/db/types/kysely.types';
+import { PageEmbeddingsRepo } from './repos/embedding/page-embeddings.repo';
+import { KyselyDB } from './types/kysely.types';
 import * as process from 'node:process';
-import { MigrationService } from '@docmost/db/services/migration.service';
-import { UserTokenRepo } from './repos/user-token/user-token.repo';
-import { BacklinkRepo } from '@docmost/db/repos/backlink/backlink.repo';
-import { ShareRepo } from '@docmost/db/repos/share/share.repo';
-import { PageListener } from '@docmost/db/listeners/page.listener';
-import { PageEmbeddingsRepo } from '@docmost/db/repos/embedding/page-embeddings.repo';
 
 // https://github.com/brianc/node-postgres/issues/811
 types.setTypeParser(types.builtins.INT8, (val) => Number(val));
@@ -54,9 +48,6 @@ types.setTypeParser(types.builtins.INT8, (val) => Number(val));
             if (process.env.DEBUG_DB?.toLowerCase() === 'true') {
               logger.debug(event.query.sql);
               logger.debug('query time: ' + event.queryDurationMillis + ' ms');
-              //if (event.query.parameters.length > 0) {
-              // logger.debug('parameters: ' + event.query.parameters);
-              //}
             }
           }
         },
@@ -64,37 +55,17 @@ types.setTypeParser(types.builtins.INT8, (val) => Number(val));
     }),
   ],
   providers: [
-    MigrationService,
-    WorkspaceRepo,
-    UserRepo,
     GroupRepo,
-    GroupUserRepo,
     SpaceRepo,
     SpaceMemberRepo,
     PageRepo,
-    PageHistoryRepo,
-    CommentRepo,
-    AttachmentRepo,
-    UserTokenRepo,
-    BacklinkRepo,
-    ShareRepo,
-    PageListener,
     PageEmbeddingsRepo,
   ],
   exports: [
-    WorkspaceRepo,
-    UserRepo,
     GroupRepo,
-    GroupUserRepo,
     SpaceRepo,
     SpaceMemberRepo,
     PageRepo,
-    PageHistoryRepo,
-    CommentRepo,
-    AttachmentRepo,
-    UserTokenRepo,
-    BacklinkRepo,
-    ShareRepo,
     PageEmbeddingsRepo,
   ],
 })
@@ -104,16 +75,11 @@ export class DatabaseModule
 
   constructor(
     @InjectKysely() private readonly db: KyselyDB,
-    private readonly migrationService: MigrationService,
     private readonly environmentService: EnvironmentService,
   ) { }
 
   async onApplicationBootstrap() {
     await this.establishConnection();
-
-    if (this.environmentService.getNodeEnv() === 'production') {
-      await this.migrationService.migrateToLatest();
-    }
   }
 
   async beforeApplicationShutdown(): Promise<void> {

@@ -34,6 +34,7 @@ import { getFileTaskById } from "@/features/file-task/services/file-task-service
 import { queryClient } from "@/main.tsx";
 import { useQueryEmit } from "@/features/websocket/use-query-emit.ts";
 
+
 interface PageImportModalProps {
   spaceId: string;
   open: boolean;
@@ -87,10 +88,11 @@ function ImportFormatSelection({ spaceId, onClose }: ImportFormatSelection) {
   const markdownFileRef = useRef<() => void>(null);
   const htmlFileRef = useRef<() => void>(null);
   const notionFileRef = useRef<() => void>(null);
-  const confluenceFileRef = useRef<() => void>(null);
+  // const confluenceFileRef = useRef<() => void>(null);
+  const docsFileRef = useRef<() => void>(null);
   const zipFileRef = useRef<() => void>(null);
 
-  const canUseConfluence = isCloud() || workspace?.hasLicenseKey;
+  // const canUseConfluence = isCloud() || workspace?.hasLicenseKey;
 
   const handleZipUpload = async (selectedFile: File, source: string) => {
     if (!selectedFile) {
@@ -126,11 +128,12 @@ function ImportFormatSelection({ spaceId, onClose }: ImportFormatSelection) {
       // Reset file input after successful upload
       if (source === "notion" && notionFileRef.current) {
         notionFileRef.current();
-      } else if (source === "confluence" && confluenceFileRef.current) {
-        confluenceFileRef.current();
+      } else if (source === "docs" && docsFileRef.current) {  // ← Change this
+        docsFileRef.current();
       } else if (source === "generic" && zipFileRef.current) {
         zipFileRef.current();
       }
+      
     } catch (err) {
       console.log("Failed to upload import file", err);
       notifications.update({
@@ -334,25 +337,19 @@ function ImportFormatSelection({ spaceId, onClose }: ImportFormatSelection) {
           )}
         </FileButton>
         <FileButton
-          onChange={(file) => handleZipUpload(file, "confluence")}
-          accept="application/zip"
-          resetRef={confluenceFileRef}
-        >
+          onChange={(file) => handleFileUpload(file ? [file] : [])}  // ← Use handleFileUpload (not handleZipUpload)
+          accept=".doc,.docx"
+          resetRef={docsFileRef}
+          >
           {(props) => (
-            <Tooltip
-              label={t("Available in enterprise edition")}
-              disabled={canUseConfluence}
-            >
               <Button
-                disabled={!canUseConfluence}
                 justify="start"
                 variant="default"
                 leftSection={<ConfluenceIcon size={18} />}
                 {...props}
               >
-                Confluence
+                Word Document
               </Button>
-            </Tooltip>
           )}
         </FileButton>
       </SimpleGrid>

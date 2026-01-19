@@ -3,6 +3,7 @@ import { PageRepo } from '@docmost/db/repos/page/page.repo';
 import { MultipartFile } from '@fastify/multipart';
 import { sanitize } from 'sanitize-filename-ts';
 import * as path from 'path';
+import * as mammoth from 'mammoth';
 import {
   htmlToJson,
   jsonToText,
@@ -60,6 +61,8 @@ export class ImportService {
         prosemirrorState = await this.processMarkdown(fileContent);
       } else if (fileExtension.endsWith('.html')) {
         prosemirrorState = await this.processHTML(fileContent);
+      } else if (fileExtension.endsWith('.doc') || fileExtension.endsWith('.docx')) {
+        prosemirrorState = await this.processDocx(fileBuffer);  // ← Add this
       }
     } catch (err) {
       const message = 'Error processing file content';
@@ -121,6 +124,25 @@ export class ImportService {
     try {
       return htmlToJson(htmlInput);
     } catch (err) {
+      throw err;
+    }
+  }
+
+  async processDocx(fileBuffer: Buffer): Promise<any> {
+    try {
+      // Convert .doc/.docx to HTML using Mammoth
+      const result = await mammoth.convertToHtml({ buffer: fileBuffer });
+      const html = result.value;
+      
+      // Log any warnings from conversion
+      if (result.messages.length > 0) {
+        this.logger.warn('Mammoth conversion warnings:', result.messages);
+      }
+      
+      // Process the HTML the same way as HTML imports
+      return this.processHTML(html);
+    } catch (err) {
+      this.logger.error('Failed to process Word document:', err);
       throw err;
     }
   }
