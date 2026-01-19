@@ -64,7 +64,7 @@ export class ImportService {
         prosemirrorState = await this.processMarkdown(fileContent);
       } else if (fileExtension.endsWith('.html')) {
         prosemirrorState = await this.processHTML(fileContent);
-      } else if (fileExtension.endsWith('.docx')) {
+      } else if (fileExtension.endsWith('.doc') || fileExtension.endsWith('.docx')) {
         prosemirrorState = await this.processDocx(fileBuffer);
       }
     } catch (err) {
@@ -131,9 +131,9 @@ export class ImportService {
     }
   }
 
-  async processDocx(docxBuffer: Buffer): Promise<any> {
+  async processDocx(fileBuffer: Buffer): Promise<any> {
     try {
-      const html = await docxBufferToHtml(docxBuffer);
+      const html = await docxBufferToHtml(fileBuffer);
       return this.processHTML(html);
     } catch (err) {
       throw err;

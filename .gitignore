@@ -1,10 +1,31 @@
+# Environment variables
 .env
 .env.dev
 .env.prod
+.env.local
+.env.*.local
+
+# Data directories
 data
-# compiled output
-/dist
-/node_modules
+uploads
+
+# Compiled output
+dist
+build
+out
+.next
+.nuxt
+
+# Node modules - all packages
+node_modules
+**/node_modules
+apps\cloud-ai-server\node_modules
+# Package manager
+.pnpm-store
+.pnpm-debug.log
+.yarn
+.yarnrc
+.npmrc.local
 
 # Logs
 logs
@@ -15,21 +36,27 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 
-# OS
+# OS files
 .DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
 
 # Tests
-/coverage
-/.nyc_output
+coverage
+.nyc_output
+*.lcov
 
 # IDEs and editors
-/.idea
+.idea
 .project
 .classpath
 .c9/
 *.launch
 .settings/
 *.sublime-workspace
+*.sublime-project
 
 # IDE - VSCode
 .vscode/*
@@ -38,6 +65,36 @@ lerna-debug.log*
 !.vscode/launch.json
 !.vscode/extensions.json
 
+# Nx
 .nx
 .nx/installation
 .nx/cache
+
+# TypeScript
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# Temporary files
+tmp
+temp
+*.tmp
+*.temp
+
+# Debug
+.debug
+
+# Secrets and credentials
+*.pem
+*.key
+cookies.txt
+credentials.json
+
+# Cache
+.cache
+.parcel-cache
+.turbo
+
+# Lock files (optional - uncomment if you don't want to track)
+# pnpm-lock.yaml
+# package-lock.json
+# yarn.lock

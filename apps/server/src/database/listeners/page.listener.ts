@@ -11,6 +11,8 @@ export class PageEvent {
   workspaceId: string;
 }
 
+const EMBEDDING_DEBOUNCE_MS = 5000; // 5 seconds
+
 @Injectable()
 export class PageListener {
   private readonly logger = new Logger(PageListener.name);
@@ -19,7 +21,7 @@ export class PageListener {
     private readonly environmentService: EnvironmentService,
     @InjectQueue(QueueName.SEARCH_QUEUE) private searchQueue: Queue,
     @InjectQueue(QueueName.AI_QUEUE) private aiQueue: Queue,
-  ) {}
+  ) { }
 
   @OnEvent(EventName.PAGE_CREATED)
   async handlePageCreated(event: PageEvent) {
@@ -38,6 +40,34 @@ export class PageListener {
     const { pageIds } = event;
 
     await this.searchQueue.add(QueueJob.PAGE_UPDATED, { pageIds });
+  }
+
+  /**
+   * Handle page content updates with 5-second debounce for embeddings
+   * Uses job deduplication to avoid redundant embedding generation
+   */
+  @OnEvent(EventName.PAGE_CONTENT_UPDATED)
+  async handlePageContentUpdated(event: PageEvent) {
+    const { pageIds, workspaceId } = event;
+
+    for (const pageId of pageIds) {
+      // Use jobId for deduplication - same page = same job
+      // Delay of 5 seconds allows rapid edits to batch together
+      await this.aiQueue.add(
+        QueueJob.GENERATE_PAGE_EMBEDDINGS,
+        { pageIds: [pageId], workspaceId },
+        {
+          jobId: `embedding:${pageId}`,
+          delay: EMBEDDING_DEBOUNCE_MS,
+          removeOnComplete: true,
+          removeOnFail: true,
+        },
+      );
+    }
+
+    this.logger.debug(
+      `Queued embedding generation for ${pageIds.length} pages with ${EMBEDDING_DEBOUNCE_MS}ms debounce`,
+    );
   }
 
   @OnEvent(EventName.PAGE_DELETED)
@@ -78,3 +108,4 @@ export class PageListener {
     return this.environmentService.getSearchDriver() === 'typesense';
   }
 }
+

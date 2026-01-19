@@ -4,6 +4,8 @@ import { EnvironmentService } from '../environment/environment.service';
 import { createRetryStrategy, parseRedisUrl } from '../../common/helpers';
 import { QueueName } from './constants';
 import { BacklinksProcessor } from './processors/backlinks.processor';
+import { EmbeddingProcessor } from './processors/embedding.processor';
+import { AiModule } from '../ai/ai.module';
 
 @Global()
 @Module({
@@ -73,8 +75,9 @@ import { BacklinksProcessor } from './processors/backlinks.processor';
         attempts: 1,
       },
     }),
+    AiModule, // For CloudAiClientService
   ],
   exports: [BullModule],
-  providers: [BacklinksProcessor],
+  providers: [BacklinksProcessor, EmbeddingProcessor],
 })
-export class QueueModule {}
+export class QueueModule { }
