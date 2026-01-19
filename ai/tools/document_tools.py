@@ -693,7 +693,9 @@ def apply_formatting_handler(arguments: Dict[str, Any], context: Dict[str, Any])
     
     Arguments:
         - format: Format to apply - 'bold', 'italic', 'underline', 'strike', 'code', or 'link' (required)
-        - range: Optional range object with 'from' and 'to' character positions. If not provided, uses current selection.
+        - text: Optional text to find and apply formatting to. If provided, the system will automatically find this text using exact match first, then fuzzy search if no exact match is found.
+        - range: Optional range object with 'from' and 'to' character positions. If 'text' is provided, this is ignored. If neither is provided, uses current selection.
+        - useFuzzy: Optional boolean to enable fuzzy search fallback (default: true). Only used when 'text' parameter is provided.
         - attrs: Optional attributes (e.g., { href: string } for links)
     
     Context (automatically provided):
@@ -725,10 +727,14 @@ def apply_formatting_handler(arguments: Dict[str, Any], context: Dict[str, Any])
         return {"error": error_msg}
     
     range_obj = arguments.get("range")
+    text = arguments.get("text")
+    use_fuzzy = arguments.get("useFuzzy", True)  # Default to True
     attrs = arguments.get("attrs", {})
     
     logger.info(f"[TOOL: apply_formatting] Format: {format_type}")
     logger.info(f"[TOOL: apply_formatting] Range: {range_obj}")
+    logger.info(f"[TOOL: apply_formatting] Text: {text}")
+    logger.info(f"[TOOL: apply_formatting] Use Fuzzy: {use_fuzzy}")
     logger.info(f"[TOOL: apply_formatting] Attrs: {attrs}")
     
     # This is a write operation, so it will be collected as a toolCall in main.py
@@ -750,7 +756,9 @@ def clear_formatting_handler(arguments: Dict[str, Any], context: Dict[str, Any])
     The frontend will execute the formatting clear using editor commands.
     
     Arguments:
-        - range: Optional range object with 'from' and 'to' character positions. If not provided, uses current selection.
+        - text: Optional text to find and clear formatting from. If provided, the system will automatically find this text using exact match first, then fuzzy search if no exact match is found.
+        - range: Optional range object with 'from' and 'to' character positions. If 'text' is provided, this is ignored. If neither is provided, uses current selection.
+        - useFuzzy: Optional boolean to enable fuzzy search fallback (default: true). Only used when 'text' parameter is provided.
     
     Context (automatically provided):
         - workspaceId: Current workspace ID
@@ -769,8 +777,12 @@ def clear_formatting_handler(arguments: Dict[str, Any], context: Dict[str, Any])
     logger.info(f"[TOOL: clear_formatting] Context: workspace={context.get('workspaceId')}, user={context.get('userId')}, page={context.get('pageId')}")
     
     range_obj = arguments.get("range")
+    text = arguments.get("text")
+    use_fuzzy = arguments.get("useFuzzy", True)  # Default to True
     
     logger.info(f"[TOOL: clear_formatting] Range: {range_obj}")
+    logger.info(f"[TOOL: clear_formatting] Text: {text}")
+    logger.info(f"[TOOL: clear_formatting] Use Fuzzy: {use_fuzzy}")
     
     # This is a write operation, so it will be collected as a toolCall in main.py
     total_duration = (datetime.now() - start_time).total_seconds()
@@ -933,7 +945,7 @@ def register_document_tools(registry: ToolRegistry):
     
     apply_formatting_tool = ToolDefinition(
         name="apply_formatting",
-        description="Apply formatting (marks) to text in a document/page. Can apply bold, italic, underline, strikethrough, code, or link formatting to a specific range or current selection. Use this when the user wants to format specific text, e.g., 'make this bold' or 'add a link here'.",
+        description="Apply formatting (marks) to text in a document/page. Can apply bold, italic, underline, strikethrough, code, or link formatting to a specific range or current selection. Use 'text' parameter to find text automatically (with fuzzy search fallback), or 'range' for precise positions. Use this when the user wants to format specific text, e.g., 'make this bold' or 'add a link here'.",
         parameters={
             "type": "object",
             "properties": {
@@ -941,6 +953,10 @@ def register_document_tools(registry: ToolRegistry):
                     "type": "string",
                     "enum": ["bold", "italic", "underline", "strike", "code", "link"],
                     "description": "The format to apply. 'bold' for bold text, 'italic' for italic, 'underline' for underlined, 'strike' for strikethrough, 'code' for inline code, 'link' for hyperlink."
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Text to find and apply formatting to. If provided, the system will automatically find this text in the document using exact match first, then fuzzy search if no exact match is found. Use this instead of 'range' for easier text-based operations."
                 },
                 "range": {
                     "type": "object",
@@ -954,7 +970,11 @@ def register_document_tools(registry: ToolRegistry):
                             "description": "End character position (0-based). Must be greater than 'from'."
                         }
                     },
-                    "description": "Optional range to apply formatting to. If not provided, formatting is applied to the current selection."
+                    "description": "Optional range to apply formatting to. If 'text' is provided, this is ignored. If neither is provided, formatting is applied to the current selection."
+                },
+                "useFuzzy": {
+                    "type": "boolean",
+                    "description": "Enable fuzzy search fallback if exact match not found (default: true). Only used when 'text' parameter is provided."
                 },
                 "attrs": {
                     "type": "object",
@@ -974,10 +994,14 @@ def register_document_tools(registry: ToolRegistry):
     
     clear_formatting_tool = ToolDefinition(
         name="clear_formatting",
-        description="Clear all formatting (marks) from text in a document/page. Removes all formatting like bold, italic, underline, strikethrough, code, and links from a specific range or current selection. Use this when the user wants to remove all formatting from text.",
+        description="Clear all formatting (marks) from text in a document/page. Removes all formatting like bold, italic, underline, strikethrough, code, and links from a specific range or current selection. Use 'text' parameter to find text automatically (with fuzzy search fallback), or 'range' for precise positions. Use this when the user wants to remove all formatting from text.",
         parameters={
             "type": "object",
             "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "Text to find and clear formatting from. If provided, the system will automatically find this text in the document using exact match first, then fuzzy search if no exact match is found. Use this instead of 'range' for easier text-based operations."
+                },
                 "range": {
                     "type": "object",
                     "properties": {
@@ -990,7 +1014,11 @@ def register_document_tools(registry: ToolRegistry):
                             "description": "End character position (0-based). Must be greater than 'from'."
                         }
                     },
-                    "description": "Optional range to clear formatting from. If not provided, formatting is cleared from the current selection."
+                    "description": "Optional range to clear formatting from. If 'text' is provided, this is ignored. If neither is provided, formatting is cleared from the current selection."
+                },
+                "useFuzzy": {
+                    "type": "boolean",
+                    "description": "Enable fuzzy search fallback if exact match not found (default: true). Only used when 'text' parameter is provided."
                 }
             }
         },

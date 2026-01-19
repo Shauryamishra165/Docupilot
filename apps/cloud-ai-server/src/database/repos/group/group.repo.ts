@@ -14,6 +14,7 @@ import { executeWithPagination } from '../../pagination/pagination';
 
 // DefaultGroup enum copied from main server to avoid circular dependency
 export enum DefaultGroup {
+  EVERYONE = 'Everyone',
   ADMIN = 'admin',
   MEMBER = 'member',
 }

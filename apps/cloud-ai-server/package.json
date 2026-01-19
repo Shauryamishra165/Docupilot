@@ -12,12 +12,13 @@
   "dependencies": {
     "@ai-sdk/google": "^2.0.18",
     "@docmost/editor-ext": "workspace:*",
+    "@google/generative-ai": "^0.24.1",
     "@joplin/turndown": "^4.0.74",
     "@joplin/turndown-plugin-gfm": "^1.0.56",
     "@langchain/textsplitters": "^0.1.0",
     "@nestjs/common": "^11.1.9",
-    "@nestjs/core": "^11.1.9",
     "@nestjs/config": "^4.0.2",
+    "@nestjs/core": "^11.1.9",
     "@nestjs/event-emitter": "^3.0.1",
     "@nestjs/platform-fastify": "^11.1.9",
     "@tiptap/core": "2.27.1",
@@ -35,15 +36,15 @@
     "@tiptap/pm": "2.27.1",
     "@tiptap/starter-kit": "2.27.1",
     "ai": "^5.0.65",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.3",
     "happy-dom": "20.0.10",
     "kysely": "^0.28.2",
     "nestjs-kysely": "^1.2.0",
     "pg": "^8.16.3",
     "pgvector": "^0.2.1",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.2",
-    "class-transformer": "^0.5.1",
-    "class-validator": "^0.14.3"
+    "rxjs": "^7.8.2"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",

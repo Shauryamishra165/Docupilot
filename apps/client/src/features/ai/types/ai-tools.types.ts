@@ -70,7 +70,9 @@ export interface ApplyFormattingTool {
   tool: 'apply_formatting';
   params: {
     format: 'bold' | 'italic' | 'underline' | 'strike' | 'code' | 'link';
-    range?: { from: number; to: number };
+    range?: { from: number; to: number };  // Optional: use text instead
+    text?: string;  // Alternative to range - will find text and get range (with fuzzy fallback)
+    useFuzzy?: boolean;  // Enable fuzzy search if exact match not found (default: true)
     attrs?: { href?: string };
   };
 }
@@ -78,7 +80,9 @@ export interface ApplyFormattingTool {
 export interface ClearFormattingTool {
   tool: 'clear_formatting';
   params: {
-    range?: { from: number; to: number };
+    range?: { from: number; to: number };  // Optional: use text instead
+    text?: string;  // Alternative to range - will find text and get range (with fuzzy fallback)
+    useFuzzy?: boolean;  // Enable fuzzy search if exact match not found (default: true)
   };
 }
 

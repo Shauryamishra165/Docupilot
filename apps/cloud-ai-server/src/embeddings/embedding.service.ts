@@ -9,7 +9,7 @@ import { EnvironmentService } from '../integrations/environment/environment.serv
 import { createStructuredChunksWithPositions } from './utils/structured-chunking.util';
 import { jsonToText } from '../collaboration/collaboration.util';
 
-const DEFAULT_EMBEDDING_MODEL = 'gemini-embedding-001';
+const DEFAULT_EMBEDDING_MODEL = 'text-embedding-004';
 const DEFAULT_EMBEDDING_DIMENSIONS = 768;
 const DEFAULT_CHUNK_SIZE = 1000;
 const DEFAULT_CHUNK_OVERLAP = 200;

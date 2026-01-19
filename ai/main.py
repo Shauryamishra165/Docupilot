@@ -438,16 +438,20 @@ async def chat(
                                         "caseSensitive": function_args.get("caseSensitive", False)
                                     }
                                 elif function_name == "apply_formatting":
-                                    # Ensure all params are included
+                                    # Ensure all params are included (including text and useFuzzy)
                                     tool_call["params"] = {
                                         "format": function_args.get("format", ""),
                                         "range": function_args.get("range"),
+                                        "text": function_args.get("text"),
+                                        "useFuzzy": function_args.get("useFuzzy", True),  # Default to True
                                         "attrs": function_args.get("attrs")
                                     }
                                 elif function_name == "clear_formatting":
-                                    # Ensure range is included if provided
+                                    # Ensure all params are included (including text and useFuzzy)
                                     tool_call["params"] = {
-                                        "range": function_args.get("range")
+                                        "range": function_args.get("range"),
+                                        "text": function_args.get("text"),
+                                        "useFuzzy": function_args.get("useFuzzy", True)  # Default to True
                                     }
                                 
                                 tool_calls_for_frontend.append(tool_call)

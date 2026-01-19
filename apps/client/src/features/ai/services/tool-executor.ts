@@ -318,10 +318,323 @@ export class ToolExecutor {
   }
 
   /**
+   * Simple fuzzy match function - checks if query characters appear in order in target
+   * Similar to the fuzzy match used in slash menu
+   */
+  private fuzzyMatch(query: string, target: string): boolean {
+    const queryLower = query.toLowerCase();
+    const targetLower = target.toLowerCase();
+    let queryIndex = 0;
+    
+    for (const char of targetLower) {
+      if (queryLower[queryIndex] === char) {
+        queryIndex++;
+        if (queryIndex === queryLower.length) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Calculate similarity score between two strings (0-1)
+   * Simple implementation based on common characters
+   */
+  private calculateSimilarity(str1: string, str2: string): number {
+    const s1 = str1.toLowerCase();
+    const s2 = str2.toLowerCase();
+    
+    if (s1 === s2) return 1.0;
+    if (s1.length === 0 || s2.length === 0) return 0.0;
+    
+    // Count common characters
+    let common = 0;
+    const minLen = Math.min(s1.length, s2.length);
+    const maxLen = Math.max(s1.length, s2.length);
+    
+    for (let i = 0; i < minLen; i++) {
+      if (s1[i] === s2[i]) common++;
+    }
+    
+    // Also check if one contains the other
+    if (s1.includes(s2) || s2.includes(s1)) {
+      return 0.8;
+    }
+    
+    return common / maxLen;
+  }
+
+  /**
+   * Find text in the document and return its range
+   * Tries exact match first, then fuzzy match as fallback
+   * Returns the first match, or null if not found
+   */
+  private findTextRange(
+    searchText: string, 
+    caseSensitive: boolean = false,
+    useFuzzy: boolean = true
+  ): { from: number; to: number } | null {
+    try {
+      console.log(`[ToolExecutor] findTextRange: Searching for "${searchText}" (caseSensitive: ${caseSensitive}, useFuzzy: ${useFuzzy})`);
+      
+      // First, try exact match using search-and-replace extension
+      this.editor.commands.setSearchTerm(searchText);
+      this.editor.commands.setCaseSensitive(caseSensitive);
+      this.editor.commands.resetIndex();
+      
+      // Trigger state update to process search - dispatch empty transaction to force plugin update
+      const { state, dispatch } = this.editor.view;
+      const tr = state.tr;
+      dispatch(tr);
+      
+      // Wait a bit for the search plugin to process (similar to findAndReplace)
+      // Check results - the plugin should have processed by now
+      let results = this.editor.storage?.searchAndReplace?.results || [];
+      console.log(`[ToolExecutor] findTextRange: Initial results count: ${results.length}`);
+      
+      if (results.length === 0) {
+        // Force another state update to ensure plugin processes
+        const { state: currentState, dispatch: currentDispatch } = this.editor.view;
+        const currentTr = currentState.tr;
+        currentDispatch(currentTr);
+        
+        // Check again after state update
+        results = this.editor.storage?.searchAndReplace?.results || [];
+        console.log(`[ToolExecutor] findTextRange: Results after state update: ${results.length}`);
+      }
+      
+      if (results.length > 0) {
+        console.log(`[ToolExecutor] findTextRange: Found exact match at range ${results[0].from}-${results[0].to}`);
+        // Return first exact match
+        return results[0];
+      }
+      
+      // If search plugin didn't find results, try direct document search as fallback
+      console.log(`[ToolExecutor] findTextRange: Search plugin returned no results, trying direct document search...`);
+      const { doc } = state;
+      const searchLower = caseSensitive ? searchText : searchText.toLowerCase();
+      let directMatch: { from: number; to: number } | null = null;
+      
+      console.log(`[ToolExecutor] findTextRange: Searching for "${searchText}" (lowercase: "${searchLower}") in document...`);
+      console.log(`[ToolExecutor] findTextRange: Document text content length: ${doc.textContent.length}`);
+      console.log(`[ToolExecutor] findTextRange: Document text preview: "${doc.textContent.substring(0, 200)}..."`);
+      
+      // Direct search through document
+      doc.descendants((node, pos) => {
+        if (node.isText && !directMatch) {
+          const nodeText = node.text || '';
+          const searchInText = caseSensitive ? nodeText : nodeText.toLowerCase();
+          const index = searchInText.indexOf(searchLower);
+          
+          if (index !== -1) {
+            directMatch = {
+              from: pos + index,
+              to: pos + index + searchText.length,
+            };
+            console.log(`[ToolExecutor] findTextRange: Found direct match!`);
+            console.log(`[ToolExecutor] findTextRange: Node text: "${nodeText}"`);
+            console.log(`[ToolExecutor] findTextRange: Match at position ${index} in node at ${pos}`);
+            console.log(`[ToolExecutor] findTextRange: Final range: ${directMatch.from}-${directMatch.to}`);
+          }
+        }
+      });
+      
+      if (directMatch) {
+        return directMatch;
+      } else {
+        console.warn(`[ToolExecutor] findTextRange: Direct search also found no match for "${searchText}"`);
+      }
+      
+      // If no exact match and fuzzy search is enabled, try fuzzy matching
+      if (useFuzzy && searchText.trim().length > 0) {
+        console.log(`[ToolExecutor] No exact match found for "${searchText}", trying fuzzy search...`);
+        const searchLower = searchText.toLowerCase();
+        const candidates: Array<{ range: { from: number; to: number }; score: number }> = [];
+        
+        // Walk through all text nodes and find fuzzy matches
+        doc.descendants((node, pos) => {
+          if (node.isText) {
+            const nodeText = node.text || '';
+            const nodeTextLower = node.textContent.toLowerCase();
+            
+            // Check if fuzzy match
+            if (this.fuzzyMatch(searchText, nodeTextLower)) {
+              // Try to find the best substring match
+              let bestScore = 0;
+              let bestStart = 0;
+              let bestEnd = 0;
+              
+              // Check all possible substrings
+              for (let i = 0; i <= nodeTextLower.length - searchText.length; i++) {
+                const substring = nodeTextLower.substring(i, i + searchText.length);
+                const score = this.calculateSimilarity(searchText, substring);
+                
+                if (score > bestScore) {
+                  bestScore = score;
+                  bestStart = i;
+                  bestEnd = i + searchText.length;
+                }
+              }
+              
+              // Also check if the search text is contained in this node
+              if (nodeTextLower.includes(searchLower)) {
+                const startIndex = nodeTextLower.indexOf(searchLower);
+                const endIndex = startIndex + searchLower.length;
+                const score = this.calculateSimilarity(searchText, nodeTextLower.substring(startIndex, endIndex));
+                
+                if (score > bestScore) {
+                  bestScore = score;
+                  bestStart = startIndex;
+                  bestEnd = endIndex;
+                }
+              }
+              
+              if (bestScore > 0.3) { // Threshold for fuzzy match
+                candidates.push({
+                  range: {
+                    from: pos + bestStart,
+                    to: pos + bestEnd,
+                  },
+                  score: bestScore,
+                });
+              }
+            }
+          }
+        });
+        
+        // Sort by score and return best match
+        if (candidates.length > 0) {
+          candidates.sort((a, b) => b.score - a.score);
+          console.log(`[ToolExecutor] Found ${candidates.length} fuzzy match(es), using best match with score ${candidates[0].score.toFixed(2)}`);
+          return candidates[0].range;
+        }
+      }
+      
+      console.warn(`[ToolExecutor] No match found for text: "${searchText}"`);
+      return null;
+    } catch (error) {
+      console.error('[ToolExecutor] Error finding text range:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Find a block by text/keywords and return its range
+   * Useful for block-level operations like deletion (for future use)
+   */
+  private findBlockByText(
+    searchText: string,
+    useFuzzy: boolean = true
+  ): { from: number; to: number; blockType: string } | null {
+    try {
+      const { state } = this.editor;
+      const { doc } = state;
+      
+      const searchLower = searchText.toLowerCase();
+      const candidates: Array<{ 
+        range: { from: number; to: number }; 
+        blockType: string;
+        score: number;
+        text: string;
+      }> = [];
+      
+      // Walk through document to find blocks
+      doc.descendants((node, pos) => {
+        // Check if it's a block-level node
+        if (node.isBlock && !node.isText) {
+          const blockText = node.textContent.toLowerCase();
+          
+          // Try exact match first
+          if (blockText.includes(searchLower)) {
+            const startIndex = blockText.indexOf(searchLower);
+            const endIndex = startIndex + searchLower.length;
+            
+            // Calculate actual positions within the block
+            const blockStart = pos + 1; // +1 to skip block node start
+            const blockEnd = pos + node.nodeSize - 1; // -1 to skip block node end
+            
+            candidates.push({
+              range: {
+                from: blockStart + startIndex,
+                to: blockStart + endIndex,
+              },
+              blockType: node.type.name,
+              score: 1.0,
+              text: node.textContent,
+            });
+          } 
+          // Try fuzzy match if enabled
+          else if (useFuzzy && this.fuzzyMatch(searchText, blockText)) {
+            const score = this.calculateSimilarity(searchText, blockText);
+            
+            if (score > 0.3) {
+              const blockStart = pos + 1;
+              const blockEnd = pos + node.nodeSize - 1;
+              
+              candidates.push({
+                range: {
+                  from: blockStart,
+                  to: blockEnd,
+                },
+                blockType: node.type.name,
+                score: score,
+                text: node.textContent,
+              });
+            }
+          }
+        }
+      });
+      
+      // Sort by score and return best match
+      if (candidates.length > 0) {
+        candidates.sort((a, b) => b.score - a.score);
+        console.log(`[ToolExecutor] Found block "${candidates[0].blockType}" with text: "${candidates[0].text.substring(0, 50)}..."`);
+        return {
+          from: candidates[0].range.from,
+          to: candidates[0].range.to,
+          blockType: candidates[0].blockType,
+        };
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('[ToolExecutor] Error finding block by text:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get range from either text or range parameter
+   * Supports fuzzy search fallback
+   */
+  private getRangeFromParams(params: { 
+    text?: string; 
+    range?: { from: number; to: number };
+    useFuzzy?: boolean;
+  }): { from: number; to: number } | null {
+    // If range is provided, use it directly
+    if (params.range) {
+      return params.range;
+    }
+    
+    // If text is provided, find it (with fuzzy fallback)
+    if (params.text) {
+      return this.findTextRange(params.text, false, params.useFuzzy !== false);
+    }
+    
+    // If neither provided, return null (will use current selection)
+    return null;
+  }
+
+  /**
    * Apply formatting (marks) to text in the document
+   * Now supports text parameter with fuzzy search fallback
    */
   private applyFormatting(params: ApplyFormattingTool['params']): boolean {
-    const { format, range, attrs } = params;
+    const { format, range, text, attrs, useFuzzy } = params;
+
+    console.log(`[ToolExecutor] applyFormatting: format=${format}, text="${text}", range=${range ? `${range.from}-${range.to}` : 'none'}, useFuzzy=${useFuzzy}`);
 
     if (!format) {
       console.warn('[ToolExecutor] applyFormatting: Format is required');
@@ -329,38 +642,90 @@ export class ToolExecutor {
     }
 
     try {
-      // If range is provided, set text selection to that range
-      if (range) {
-        const { from, to } = range;
-        if (from >= to) {
-          console.warn('[ToolExecutor] applyFormatting: Invalid range, from must be less than to');
+      // Get range from either text or range parameter
+      const targetRange = this.getRangeFromParams({ text, range, useFuzzy });
+      
+      if (!targetRange) {
+        console.warn('[ToolExecutor] applyFormatting: No range found and no current selection');
+        // If no range and no selection, try to apply format anyway (will affect next typed text)
+        // But this is not ideal, so return false
+        return false;
+      }
+      
+      const { from, to } = targetRange;
+      if (from >= to) {
+        console.warn('[ToolExecutor] applyFormatting: Invalid range, from must be less than to');
+        return false;
+      }
+      
+      console.log(`[ToolExecutor] applyFormatting: Setting selection to ${from}-${to}`);
+      
+      // First, set the text selection
+      const selectionSet = this.editor.commands.setTextSelection({ from, to });
+      if (!selectionSet) {
+        console.warn('[ToolExecutor] applyFormatting: Failed to set text selection');
+        return false;
+      }
+      
+      // Verify selection was set correctly
+      const { state } = this.editor.view;
+      const currentSelection = state.selection;
+      console.log(`[ToolExecutor] applyFormatting: Current selection after setTextSelection: ${currentSelection.from}-${currentSelection.to}`);
+      
+      if (currentSelection.from !== from || currentSelection.to !== to) {
+        console.warn(`[ToolExecutor] applyFormatting: Selection mismatch! Expected ${from}-${to}, got ${currentSelection.from}-${currentSelection.to}`);
+        // Try using focus and then setTextSelection again
+        this.editor.commands.focus();
+        const retrySelection = this.editor.commands.setTextSelection({ from, to });
+        if (!retrySelection) {
+          console.error('[ToolExecutor] applyFormatting: Failed to set selection on retry');
           return false;
         }
-        this.editor.commands.setTextSelection({ from, to });
       }
-
+      
       // Apply formatting based on type
+      let success = false;
       switch (format) {
         case 'bold':
-          return this.editor.commands.setMark('bold');
+          success = this.editor.commands.setMark('bold');
+          break;
         case 'italic':
-          return this.editor.commands.setMark('italic');
+          success = this.editor.commands.setMark('italic');
+          break;
         case 'underline':
-          return this.editor.commands.setMark('underline');
+          success = this.editor.commands.setMark('underline');
+          break;
         case 'strike':
-          return this.editor.commands.setMark('strike');
+          success = this.editor.commands.setMark('strike');
+          break;
         case 'code':
-          return this.editor.commands.setMark('code');
+          success = this.editor.commands.setMark('code');
+          break;
         case 'link':
           if (!attrs?.href) {
             console.warn('[ToolExecutor] applyFormatting: href is required for link format');
             return false;
           }
-          return this.editor.commands.setLink({ href: attrs.href });
+          success = this.editor.commands.setLink({ href: attrs.href });
+          break;
         default:
           console.warn('[ToolExecutor] applyFormatting: Unknown format:', format);
           return false;
       }
+      
+      console.log(`[ToolExecutor] applyFormatting: Format "${format}" applied: ${success}`);
+      
+      // Verify the mark was actually applied
+      if (success && format !== 'link') {
+        const finalState = this.editor.view.state;
+        const markType = finalState.schema.marks[format];
+        if (markType) {
+          const hasMark = markType.isInSet(finalState.selection.$from.marks());
+          console.log(`[ToolExecutor] applyFormatting: Mark "${format}" is in set: ${hasMark}`);
+        }
+      }
+      
+      return success;
     } catch (error) {
       console.error('[ToolExecutor] Error applying formatting:', error);
       return false;
@@ -369,14 +734,17 @@ export class ToolExecutor {
 
   /**
    * Clear all formatting (marks) from text in the document
+   * Now supports text parameter with fuzzy search fallback
    */
   private clearFormatting(params: ClearFormattingTool['params']): boolean {
-    const { range } = params;
+    const { range, text, useFuzzy } = params;
 
     try {
-      // If range is provided, set text selection to that range
-      if (range) {
-        const { from, to } = range;
+      // Get range from either text or range parameter
+      const targetRange = this.getRangeFromParams({ text, range, useFuzzy });
+      
+      if (targetRange) {
+        const { from, to } = targetRange;
         if (from >= to) {
           console.warn('[ToolExecutor] clearFormatting: Invalid range, from must be less than to');
           return false;
@@ -385,12 +753,10 @@ export class ToolExecutor {
       }
 
       // Clear all marks from the selection
-      // Use unsetAllMarks command if available, otherwise manually remove marks
       const { state, dispatch } = this.editor.view;
       const { from, to } = state.selection;
 
       if (from === to) {
-        // No selection, nothing to clear
         console.warn('[ToolExecutor] clearFormatting: No selection to clear formatting from');
         return false;
       }
@@ -402,7 +768,6 @@ export class ToolExecutor {
         if (node.isText && node.marks.length > 0) {
           const nodeFrom = Math.max(from, pos);
           const nodeTo = Math.min(to, pos + node.nodeSize);
-          // Remove all marks from this text node
           node.marks.forEach(mark => {
             tr.removeMark(nodeFrom, nodeTo, mark.type);
           });

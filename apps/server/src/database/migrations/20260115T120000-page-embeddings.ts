@@ -19,7 +19,7 @@ export async function up(db: Kysely<any>): Promise<void> {
         .addColumn('content', 'text', (col) => col.notNull())
         .addColumn('content_hash', 'varchar(64)', (col) => col.notNull())
         .addColumn('model_name', 'varchar(100)', (col) =>
-            col.notNull().defaultTo('gemini-embedding-001'),
+            col.notNull().defaultTo('text-embedding-004'),
         )
         .addColumn('created_at', 'timestamptz', (col) =>
             col.notNull().defaultTo(sql`now()`),

@@ -11,14 +11,12 @@ import { GroupUser, InsertableGroupUser } from '@docmost/db/types/entity.types';
 import { PaginationOptions } from '../../pagination/pagination-options';
 import { executeWithPagination } from '@docmost/db/pagination/pagination';
 import { GroupRepo } from '@docmost/db/repos/group/group.repo';
-import { UserRepo } from '@docmost/db/repos/user/user.repo';
 
 @Injectable()
 export class GroupUserRepo {
   constructor(
     @InjectKysely() private readonly db: KyselyDB,
     private readonly groupRepo: GroupRepo,
-    private readonly userRepo: UserRepo,
   ) {}
 
   async getGroupUserById(
@@ -89,9 +87,13 @@ export class GroupUserRepo {
           throw new NotFoundException('Group not found');
         }
 
-        const user = await this.userRepo.findById(userId, workspaceId, {
-          trx: trx,
-        });
+        // Check if user exists in the workspace
+        const user = await dbOrTx(this.db, trx)
+          .selectFrom('users')
+          .select('id')
+          .where('id', '=', userId)
+          .where('workspaceId', '=', workspaceId)
+          .executeTakeFirst();
 
         if (!user) {
           throw new NotFoundException('User not found');
