@@ -17,6 +17,6 @@ export class SimilaritySearchDto {
     threshold?: number;
 
     @IsOptional()
-    @IsString() // Accepts both UUID and slugId
+    @IsString()  // Accepts both UUID and slugId
     pageId?: string;
 }
