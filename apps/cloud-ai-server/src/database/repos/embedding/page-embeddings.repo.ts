@@ -7,6 +7,7 @@ import {
     PageEmbedding,
 } from '../../types/entity.types';
 import { EmbeddingMetadata } from '../../types/embeddings.types';
+import { validate as isValidUUID } from 'uuid';
 
 export interface SimilarityResult {
     pageId: string;
@@ -132,17 +133,62 @@ export class PageEmbeddingsRepo {
 
     /**
      * Find similar embeddings using cosine distance
+     * If pageId is provided, searches only within that page's chunks
+     * If pageId is not provided, searches across the entire workspace
+     * 
+     * pageId can be either a UUID (pages.id) or a slugId (pages.slug_id)
      */
     async findSimilar(
         queryEmbedding: number[],
         workspaceId: string,
         limit: number = 10,
         threshold: number = 0.7,
+        pageId?: string,
     ): Promise<SimilarityResult[]> {
         const embeddingVector = `[${queryEmbedding.join(',')}]`;
 
-        // Use pgvector's <=> operator for cosine distance
-        const results = await sql<SimilarityResult & { metadata: any }>`
+        // Determine if pageId is a UUID or slugId
+        const isPageIdUUID = pageId ? isValidUUID(pageId) : false;
+
+        // Build complete SQL query with conditional pageId filter
+        // If pageId is provided, filter by either UUID (p.id) or slugId (p.slug_id)
+        const results = pageId
+            ? isPageIdUUID
+                ? await sql<SimilarityResult & { metadata: any }>`
+                      SELECT 
+                        pe.page_id as "pageId",
+                        pe.chunk_index as "chunkIndex",
+                        pe.content,
+                        pe.metadata,
+                        pe.embedding <=> ${embeddingVector}::vector as distance
+                      FROM page_embeddings pe
+                      INNER JOIN pages p ON p.id = pe.page_id
+                      WHERE 
+                        pe.workspace_id = ${workspaceId}
+                        AND p.id = ${pageId}
+                        AND p.deleted_at IS NULL
+                        AND (pe.embedding <=> ${embeddingVector}::vector) <= ${threshold}
+                      ORDER BY distance ASC
+                      LIMIT ${limit}
+                    `.execute(this.db)
+                : await sql<SimilarityResult & { metadata: any }>`
+                      SELECT 
+                        pe.page_id as "pageId",
+                        pe.chunk_index as "chunkIndex",
+                        pe.content,
+                        pe.metadata,
+                        pe.embedding <=> ${embeddingVector}::vector as distance
+                      FROM page_embeddings pe
+                      INNER JOIN pages p ON p.id = pe.page_id
+                      WHERE 
+                        pe.workspace_id = ${workspaceId}
+                        AND p.slug_id = ${pageId}
+                        AND p.deleted_at IS NULL
+                        AND (pe.embedding <=> ${embeddingVector}::vector) <= ${threshold}
+                      ORDER BY distance ASC
+                      LIMIT ${limit}
+                    `.execute(this.db)
+            : await sql<SimilarityResult & { metadata: any }>`
       SELECT 
         pe.page_id as "pageId",
         pe.chunk_index as "chunkIndex",

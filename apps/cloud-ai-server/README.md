@@ -37,7 +37,8 @@ This is the **proprietary cloud service** that handles AI features for Docmost. 
    PORT=3001
    DATABASE_URL=postgresql://...
    GEMINI_API_KEY=your-key-here
-   SUBSCRIPTION_SECRET=your-secret-for-verifying-tokens
+   EXTERNAL_SERVICE_API_KEY=parth128
+   ALLOWED_ORIGINS=http://localhost:3000
    ```
 
 3. **Build:**
@@ -50,13 +51,9 @@ This is the **proprietary cloud service** that handles AI features for Docmost. 
    pnpm start:dev  # Development
    pnpm start:prod # Production
    ```
-
-## Subscription Verification
-
-The service uses `SubscriptionGuard` to verify that requests come from users with active subscriptions. 
-
-**TODO**: Integrate with your billing system (Stripe, etc.) in `src/auth/subscription.service.ts`
-
+## API Key Authentication
+The service uses `ApiKeyAuthGuard` to verify that requests come from the main server. 
+All endpoints require the `X-API-Key` header with the value from `EXTERNAL_SERVICE_API_KEY` environment variable.
 ## Deployment
 
 This service should be deployed separately from the main Docmost server:
@@ -67,10 +64,10 @@ This service should be deployed separately from the main Docmost server:
 
 ## Security
 
-- All endpoints require subscription token
-- Rate limiting per subscription plan
-- CORS configured for Electron apps
-- No AI code in client applications
+All endpoints require API key authentication (`X-API-Key` header)
+- Context headers for tracking (`X-Workspace-Id`, `X-User-Id`, `X-Page-Id`)
+- CORS restricted to backend origin (configurable via `ALLOWED_ORIGINS`)
+- Input validation via ValidationPipe
 
 ## Development Notes
 

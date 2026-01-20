@@ -1,28 +1,67 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { EnvironmentService } from '../environment/environment.service';
 
+interface CloudAiRequestOptions {
+    workspaceId?: string;
+    userId?: string;
+    pageId?: string;
+}
+
 @Injectable()
 export class CloudAiClientService {
     private readonly logger = new Logger(CloudAiClientService.name);
     private readonly cloudAiUrl: string;
+    private readonly apiKey: string;
 
     constructor(private readonly environmentService: EnvironmentService) {
         // Get cloud AI URL from environment or use default
         this.cloudAiUrl =
             process.env.CLOUD_AI_URL || 'http://localhost:3001';
+        
+        // Get API key for authentication
+        this.apiKey =
+            process.env.EXTERNAL_SERVICE_API_KEY ||
+            this.environmentService.getExternalServiceApiKey() ||
+            'parth128'; // Fallback for development
+    }
+
+    /**
+     * Build headers for Cloud AI server requests
+     */
+    private buildHeaders(options?: CloudAiRequestOptions): Record<string, string> {
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'X-API-Key': this.apiKey,
+        };
+
+        // Add context headers if provided
+        if (options?.workspaceId) {
+            headers['X-Workspace-Id'] = options.workspaceId;
+        }
+        if (options?.userId) {
+            headers['X-User-Id'] = options.userId;
+        }
+        if (options?.pageId) {
+            headers['X-Page-Id'] = options.pageId;
+        }
+
+        return headers;
     }
 
     /**
      * Generate embeddings for a page via HTTP call to cloud-ai-server
      * Returns false if cloud-ai-server is not available (graceful degradation)
      */
-    async generatePageEmbeddings(pageId: string): Promise<boolean> {
+    async generatePageEmbeddings(
+        pageId: string,
+        options?: CloudAiRequestOptions,
+    ): Promise<boolean> {
         try {
+            const headers = this.buildHeaders({ ...options, pageId });
+
             const response = await fetch(`${this.cloudAiUrl}/embeddings/generate`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers,
                 body: JSON.stringify({ pageId }),
             });
 
@@ -57,13 +96,16 @@ export class CloudAiClientService {
      * Delete embeddings for a page via HTTP call to cloud-ai-server
      * Returns false if cloud-ai-server is not available (graceful degradation)
      */
-    async deletePageEmbeddings(pageId: string): Promise<boolean> {
+    async deletePageEmbeddings(
+        pageId: string,
+        options?: CloudAiRequestOptions,
+    ): Promise<boolean> {
         try {
+            const headers = this.buildHeaders({ ...options, pageId });
+
             const response = await fetch(`${this.cloudAiUrl}/embeddings/delete`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers,
                 body: JSON.stringify({ pageId }),
             });
 

@@ -1,9 +1,10 @@
 import { Module } from '@nestjs/common';
-import { SubscriptionGuard } from './subscription.guard';
-import { SubscriptionService } from './subscription.service';
+import { ApiKeyAuthGuard } from './api-key-auth.guard';
+import { EnvironmentModule } from '../integrations/environment/environment.module';
 
 @Module({
-    providers: [SubscriptionGuard, SubscriptionService],
-    exports: [SubscriptionGuard, SubscriptionService],
+    imports: [EnvironmentModule],
+    providers: [ApiKeyAuthGuard],
+    exports: [ApiKeyAuthGuard],
 })
 export class AuthModule {}

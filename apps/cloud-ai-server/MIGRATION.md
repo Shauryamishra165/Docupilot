@@ -4,7 +4,7 @@
 
 ✅ **Created `apps/cloud-ai-server/`** - New service for AI features
 ✅ **Moved embedding code** from `apps/server/src/core/embedding/` to `apps/cloud-ai-server/src/embeddings/`
-✅ **Created subscription guard** - Protects AI endpoints with subscription verification
+✅ **Created API key authentication** - Protects AI endpoints with API key verification
 ✅ **Updated queue processor** - Handles missing embedding service gracefully (for Electron builds)
 ✅ **Created agent module structure** - Ready for future AI agent implementation
 
@@ -21,9 +21,9 @@ apps/
     └── src/
         ├── main.ts                  # Entry point
         ├── cloud-ai.module.ts       # Main module
-        ├── auth/                    # Subscription verification
-        │   ├── subscription.guard.ts
-        │   └── subscription.service.ts
+        ├── auth/                    # API key authentication
+        │   ├── api-key-auth.guard.ts
+        │   └── auth.module.ts
         ├── embeddings/              # Moved from server
         │   ├── embedding.service.ts
         │   ├── embedding.controller.ts
@@ -47,15 +47,12 @@ apps/
 
 ### 3. Cloud AI Server
 - New standalone service on port 3001
-- Requires subscription token for all endpoints
+- Requires API key authentication (`X-API-Key` header) for all endpoints
 - Shares database with main server (for page_embeddings table)
 
 ## Next Steps
 
-1. **Integrate subscription verification** with your billing system (Stripe, etc.)
-   - Update `apps/cloud-ai-server/src/auth/subscription.service.ts`
-
-2. **Deploy cloud AI server** separately
+1. **Deploy cloud AI server** separately
    - Deploy to Google Cloud Run, AWS ECS, or Railway
    - Configure environment variables
    - Set up CORS for Electron apps
@@ -71,7 +68,7 @@ apps/
 5. **Create AI client SDK** for Electron app
    - Package in `packages/ai-client/`
    - Handles API calls to cloud service
-   - Manages subscription tokens
+   - Uses API key authentication
 
 ## Testing
 

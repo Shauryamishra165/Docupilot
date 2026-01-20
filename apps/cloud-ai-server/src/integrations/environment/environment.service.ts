@@ -277,4 +277,8 @@ export class EnvironmentService {
       'http://localhost:11434',
     );
   }
+
+  getExternalServiceApiKey(): string {
+    return this.configService.get<string>('EXTERNAL_SERVICE_API_KEY');
+  }
 }

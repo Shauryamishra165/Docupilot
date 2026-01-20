@@ -37,10 +37,11 @@ class ToolRegistry:
         return self._tools.get(name)
     
     def _clean_schema(self, schema: Any) -> Any:
-        """Recursively remove 'default' fields from schema (Gemini doesn't support them)"""
+        """Recursively remove unsupported fields from schema (Gemini doesn't support 'default', 'minimum', 'maximum')"""
         if isinstance(schema, dict):
-            # Create a new dict without 'default' key
-            cleaned = {k: self._clean_schema(v) for k, v in schema.items() if k != "default"}
+            # Create a new dict without unsupported keys
+            unsupported_keys = {"default", "minimum", "maximum"}
+            cleaned = {k: self._clean_schema(v) for k, v in schema.items() if k not in unsupported_keys}
             return cleaned
         elif isinstance(schema, list):
             return [self._clean_schema(item) for item in schema]

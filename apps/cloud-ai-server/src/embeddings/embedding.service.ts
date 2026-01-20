@@ -202,22 +202,26 @@ export class EmbeddingService {
 
     /**
      * Find similar pages based on a query
+     * If pageId is provided, searches only within that page's chunks
+     * If pageId is not provided, searches across the entire workspace
      */
     async findSimilarPages(
         query: string,
         workspaceId: string,
         limit: number = 10,
         threshold: number = 0.7,
+        pageId?: string,
     ) {
         // Generate embedding for the query
         const queryEmbedding = await this.generateEmbedding(query);
 
-        // Find similar chunks
+        // Find similar chunks (optionally filtered by pageId)
         return this.embeddingsRepo.findSimilar(
             queryEmbedding,
             workspaceId,
             limit,
             threshold,
+            pageId,
         );
     }
 }

@@ -89,10 +89,10 @@ export class EmbeddingProcessor extends WorkerHost {
             return;
         }
 
-        const { pageIds } = data;
+        const { pageIds, workspaceId } = data;
         for (const pageId of pageIds) {
             try {
-                await this.cloudAiClient.generatePageEmbeddings(pageId);
+                await this.cloudAiClient.generatePageEmbeddings(pageId, { workspaceId });
             } catch (error) {
                 this.logger.error(`Failed to generate embeddings for new page ${pageId}`, error);
             }
@@ -102,10 +102,10 @@ export class EmbeddingProcessor extends WorkerHost {
     private async handlePageContentUpdated(data: PageJobData): Promise<void> {
         if (!this.cloudAiClient) return;
 
-        const { pageIds } = data;
+        const { pageIds, workspaceId } = data;
         for (const pageId of pageIds) {
             try {
-                await this.cloudAiClient.generatePageEmbeddings(pageId);
+                await this.cloudAiClient.generatePageEmbeddings(pageId, { workspaceId });
             } catch (error) {
                 this.logger.error(`Failed to update embeddings for page ${pageId}`, error);
             }
@@ -115,10 +115,10 @@ export class EmbeddingProcessor extends WorkerHost {
     private async handleGenerateEmbeddings(data: PageJobData): Promise<void> {
         if (!this.cloudAiClient) return;
 
-        const { pageIds } = data;
+        const { pageIds, workspaceId } = data;
         for (const pageId of pageIds) {
             try {
-                await this.cloudAiClient.generatePageEmbeddings(pageId);
+                await this.cloudAiClient.generatePageEmbeddings(pageId, { workspaceId });
             } catch (error) {
                 this.logger.error(`Failed to generate embeddings for page ${pageId}`, error);
             }
@@ -128,10 +128,10 @@ export class EmbeddingProcessor extends WorkerHost {
     private async handleDeleteEmbeddings(data: PageJobData): Promise<void> {
         if (!this.cloudAiClient) return;
 
-        const { pageIds } = data;
+        const { pageIds, workspaceId } = data;
         for (const pageId of pageIds) {
             try {
-                await this.cloudAiClient.deletePageEmbeddings(pageId);
+                await this.cloudAiClient.deletePageEmbeddings(pageId, { workspaceId });
             } catch (error) {
                 this.logger.error(`Failed to delete embeddings for page ${pageId}`, error);
             }
@@ -142,10 +142,10 @@ export class EmbeddingProcessor extends WorkerHost {
         if (!this.cloudAiClient) return;
 
         // Soft delete: delete embeddings since page is in trash
-        const { pageIds } = data;
+        const { pageIds, workspaceId } = data;
         for (const pageId of pageIds) {
             try {
-                await this.cloudAiClient.deletePageEmbeddings(pageId);
+                await this.cloudAiClient.deletePageEmbeddings(pageId, { workspaceId });
             } catch (error) {
                 this.logger.error(`Failed to delete embeddings for soft-deleted page ${pageId}`, error);
             }
@@ -156,10 +156,10 @@ export class EmbeddingProcessor extends WorkerHost {
         if (!this.cloudAiClient) return;
 
         // Restore: regenerate embeddings
-        const { pageIds } = data;
+        const { pageIds, workspaceId } = data;
         for (const pageId of pageIds) {
             try {
-                await this.cloudAiClient.generatePageEmbeddings(pageId);
+                await this.cloudAiClient.generatePageEmbeddings(pageId, { workspaceId });
             } catch (error) {
                 this.logger.error(`Failed to regenerate embeddings for restored page ${pageId}`, error);
             }
@@ -171,10 +171,10 @@ export class EmbeddingProcessor extends WorkerHost {
 
         // Permanent delete: embeddings should cascade delete via FK
         // But we'll explicitly delete to be safe
-        const { pageIds } = data;
+        const { pageIds, workspaceId } = data;
         for (const pageId of pageIds) {
             try {
-                await this.cloudAiClient.deletePageEmbeddings(pageId);
+                await this.cloudAiClient.deletePageEmbeddings(pageId, { workspaceId });
             } catch (error) {
                 this.logger.error(`Failed to delete embeddings for deleted page ${pageId}`, error);
             }

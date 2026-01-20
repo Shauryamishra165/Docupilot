@@ -14,10 +14,15 @@ async function bootstrap() {
         new FastifyAdapter(),
     );
 
-    // Enable CORS for Electron apps
+    // Enable CORS - restrict to backend origin for security
+    const allowedOrigins = process.env.ALLOWED_ORIGINS
+        ? process.env.ALLOWED_ORIGINS.split(',')
+        : ['http://localhost:3000']; // Default to main server origin
+    
     app.enableCors({
-        origin: true,
+        origin: allowedOrigins,
         credentials: true,
+        allowedHeaders: ['Content-Type', 'X-API-Key', 'X-Workspace-Id', 'X-User-Id', 'X-Page-Id'],
     });
 
     // Global validation pipe

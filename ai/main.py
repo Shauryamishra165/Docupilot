@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 from tools.tool_registry import tool_registry
 from tools.document_tools import register_document_tools
+from tools.vector_search_tools import register_vector_search_tools
 from text_transform import create_text_transform_endpoint
 
 # Configure logging
@@ -71,6 +72,7 @@ except Exception as e:
 
 # Register all tools
 register_document_tools(tool_registry)
+register_vector_search_tools(tool_registry)
 tools_list = tool_registry.list_tools()
 logger.info(f"Tool registry initialized: {len(tools_list)} tool group(s) registered")
 for tool_group in tools_list:
@@ -277,7 +279,7 @@ async def chat(
         except Exception as e:
             logger.error(f"[LLM] Error sending message: {str(e)}")
             logger.info("[LLM] Falling back to sending without tools")
-            response = chat_session.send_message(last_message.content)
+        response = chat_session.send_message(last_message.content)
         
         logger.info(f"[LLM OUTPUT] Received response from Gemini")
         logger.info(f"[LLM OUTPUT] Response type: {type(response).__name__}")

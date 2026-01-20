@@ -9,16 +9,20 @@ The AI Tool Registry allows the AI service to call back to the Docmost backend t
 ```
 User Message → AI Service (Python)
   ↓
-AI decides to use a tool (e.g., read_document)
+AI decides to use a tool (e.g., read_document, vector_search)
   ↓
-Tool Handler calls Backend API
+Tool Handler calls Backend API or Cloud AI Server
   ↓
-Backend validates & returns data
+Backend/Cloud AI validates & returns data
   ↓
 Tool returns result to AI
   ↓
 AI uses result to generate response
 ```
+
+**Service Communication:**
+- **Document Tools** → Backend API (port 3000) - for reading/writing documents
+- **Vector Search Tools** → Cloud AI Server (port 3001) - for semantic search
 
 ## Context Passing
 
@@ -77,6 +81,29 @@ AI: "Based on the document content, this document is about..."
 2. Calls backend API: `POST /api/external-service/ai/document/read`
 3. Returns document content to AI
 4. AI uses content to answer user's question
+
+### 2. `vector_search`
+
+Performs semantic/vector search across documents in the workspace to find relevant content based on a query. Uses embedding similarity search to find documents that are semantically similar to the query, even if they don't contain exact keywords.
+
+**Parameters:**
+- `query` (required): The search query or message to find semantically similar content
+- `limit` (optional): Number of results to return (default: 10, min: 1, max: 100)
+- `threshold` (optional): Similarity threshold 0-1 (default: 0.7). Lower = stricter matching
+
+**Example AI Usage:**
+```
+User: "Find documents about authentication"
+AI: [Calls vector_search tool automatically]
+AI: "I found 5 relevant documents about authentication..."
+```
+
+**Tool Handler Flow:**
+1. Gets `query` from arguments
+2. Calls Cloud AI server: `POST http://localhost:3001/embeddings/search`
+3. Uses API key authentication (`X-API-Key` header)
+4. Returns semantically similar document chunks ranked by relevance
+5. AI uses results to provide context-aware answers
 
 ## Adding New Tools
 
@@ -176,8 +203,14 @@ Add to `ai/.env`:
 # Backend URL for tool callbacks
 BACKEND_URL=http://localhost:3000
 
-# API key for backend authentication (should match backend's EXTERNAL_SERVICE_API_KEY)
+# Cloud AI Server URL for vector search
+CLOUD_AI_URL=http://localhost:3001
+
+# API key for backend and Cloud AI authentication (should match EXTERNAL_SERVICE_API_KEY in both services)
 EXTERNAL_SERVICE_API_KEY=parth128
+
+# Optional: Timeout for Cloud AI API requests (default: 30 seconds)
+CLOUD_AI_API_TIMEOUT=30.0
 ```
 
 ## Function Calling Flow
@@ -252,11 +285,14 @@ result = tool_registry.execute_tool(
 print(result)
 ```
 
+## Tool Files
+
+- **`document_tools.py`**: Document manipulation tools (read, replace, insert, etc.)
+- **`vector_search_tools.py`**: Vector/semantic search tools (vector_search)
+
 ## Future Tools
 
 Potential tools to add:
-- `write_document`: Modify document content
-- `search_documents`: Search across documents
 - `analyze_document`: AI-powered document analysis
 - `summarize_document`: Generate document summaries
 - `extract_key_points`: Extract key points from document
