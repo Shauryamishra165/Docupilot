@@ -98,6 +98,23 @@ export function updatePageData(data: IPage) {
     data.title,
     data.icon,
   );
+
+  // Invalidate embedding status when page content is updated (embeddings will be regenerated)
+  // Invalidate if content exists and has changed
+  if (data.content !== undefined) {
+    const oldContent = pageBySlug?.content || pageById?.content;
+    // Invalidate if content is new or has changed
+    if (!oldContent || JSON.stringify(oldContent) !== JSON.stringify(data.content)) {
+      queryClient.invalidateQueries({
+        queryKey: ["embeddings", "status", data.id],
+      });
+      if (data.slugId) {
+        queryClient.invalidateQueries({
+          queryKey: ["embeddings", "status", data.slugId],
+        });
+      }
+    }
+  }
 }
 
 export function useUpdateTitlePageMutation() {

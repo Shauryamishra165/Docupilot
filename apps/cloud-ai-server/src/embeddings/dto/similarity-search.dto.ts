@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, Min, Max } from 'class-validator';
+import { IsString, IsOptional, IsNumber, Min, Max, IsUUID } from 'class-validator';
 
 export class SimilaritySearchDto {
     @IsString()
@@ -17,6 +17,6 @@ export class SimilaritySearchDto {
     threshold?: number;
 
     @IsOptional()
-    @IsString()  // Accepts both UUID and slugId
+    @IsUUID()
     pageId?: string;
 }

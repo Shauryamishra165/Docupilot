@@ -23,8 +23,6 @@ import {
   shareSearchSpotlight,
 } from "@/features/search/constants.ts";
 
-const links = [{ link: APP_ROUTE.HOME, label: "Home" }];
-
 export function AppHeader() {
   const { t } = useTranslation();
   const [mobileOpened] = useAtom(mobileSidebarAtom);
@@ -37,12 +35,6 @@ export function AppHeader() {
   const isHomeRoute = location.pathname.startsWith("/home");
   const isSpacesRoute = location.pathname === "/spaces";
   const hideSidebar = isHomeRoute || isSpacesRoute;
-
-  const items = links.map((link) => (
-    <Link key={link.label} to={link.link} className={classes.link}>
-      {t(link.label)}
-    </Link>
-  ));
 
   return (
     <>
@@ -81,22 +73,15 @@ export function AppHeader() {
           >
             Docmost
           </Text>
-
-          <Group ml={50} gap={5} className={classes.links} visibleFrom="sm">
-            {items}
-          </Group>
         </Group>
 
-        <div>
+        <Group px={"xl"} wrap="nowrap" gap="md">
           <Group visibleFrom="sm">
             <SearchControl onClick={searchSpotlight.open} />
           </Group>
           <Group hiddenFrom="sm">
             <SearchMobileControl onSearch={searchSpotlight.open} />
           </Group>
-        </div>
-
-        <Group px={"xl"} wrap="nowrap">
           {isCloud() && isTrial && trialDaysLeft !== 0 && (
             <Badge
               variant="light"

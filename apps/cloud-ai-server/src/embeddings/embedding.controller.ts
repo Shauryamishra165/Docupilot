@@ -1,7 +1,9 @@
 import {
     Controller,
     Post,
+    Get,
     Body,
+    Param,
     HttpCode,
     HttpStatus,
     Headers,
@@ -114,5 +116,27 @@ export class EmbeddingController {
             results,
             count: results.length,
         };
+    }
+
+    /**
+     * Check if embeddings exist for a page
+     * Returns status: { hasEmbeddings: boolean }
+     * Requires: X-API-Key header
+     */
+    @Get('status/:pageId')
+    @HttpCode(HttpStatus.OK)
+    async getEmbeddingStatus(
+        @Param('pageId') pageId: string,
+        @Headers('x-workspace-id') workspaceId?: string,
+        @Headers('x-user-id') userId?: string,
+    ) {
+        if (userId || workspaceId) {
+            this.logger.debug(
+                `Checking embedding status with context: workspace=${workspaceId}, user=${userId}, page=${pageId}`,
+            );
+        }
+
+        const hasEmbeddings = await this.embeddingService.hasEmbeddings(pageId);
+        return { hasEmbeddings };
     }
 }

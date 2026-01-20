@@ -224,4 +224,13 @@ export class EmbeddingService {
             pageId,
         );
     }
+
+    /**
+     * Check if embeddings exist for a page
+     * Returns true if embeddings exist, false otherwise
+     */
+    async hasEmbeddings(pageId: string): Promise<boolean> {
+        const count = await this.embeddingsRepo.countByPageId(pageId);
+        return count > 0;
+    }
 }

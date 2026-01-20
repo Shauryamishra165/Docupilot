@@ -27,7 +27,6 @@ import {
   IconFileExport,
   IconLink,
   IconPlus,
-  IconPointFilled,
   IconTrash,
 } from "@tabler/icons-react";
 import {
@@ -73,6 +72,7 @@ import { mobileSidebarAtom } from "@/components/layouts/global/hooks/atoms/sideb
 import { useToggleSidebar } from "@/components/layouts/global/hooks/hooks/use-toggle-sidebar.ts";
 import CopyPageModal from "../../components/copy-page-modal.tsx";
 import { duplicatePage } from "../../services/page-service.ts";
+import { EmbeddingStatusIcon } from "../../components/embedding-status-icon.tsx";
 
 interface SpaceTreeProps {
   spaceId: string;
@@ -700,7 +700,7 @@ function PageArrow({ node, onExpandTree }: PageArrowProps) {
             <IconChevronRight stroke={2} size={18} />
           )
         ) : (
-          <IconPointFilled size={8} />
+          <EmbeddingStatusIcon pageId={node.id} size={12} />
         )
       ) : null}
     </ActionIcon>

@@ -71,6 +71,19 @@ export const useQuerySubscription = () => {
               data.payload.title,
               data.payload.icon,
             );
+
+            // Invalidate embedding status when page content is updated
+            // This ensures status is rechecked after embeddings are regenerated
+            if (data.payload.content !== undefined) {
+              queryClient.invalidateQueries({
+                queryKey: ["embeddings", "status", data.id],
+              });
+              if (data.payload.slugId) {
+                queryClient.invalidateQueries({
+                  queryKey: ["embeddings", "status", data.payload.slugId],
+                });
+              }
+            }
           }
 
           /*

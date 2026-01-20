@@ -135,4 +135,47 @@ export class CloudAiClientService {
             return false; // Don't throw - allow main server to continue
         }
     }
+
+    /**
+     * Check if embeddings exist for a page
+     * Returns null if cloud-ai-server is not available (graceful degradation)
+     */
+    async checkEmbeddingStatus(
+        pageId: string,
+        options?: CloudAiRequestOptions,
+    ): Promise<boolean | null> {
+        try {
+            const headers = this.buildHeaders(options);
+
+            const response = await fetch(`${this.cloudAiUrl}/embeddings/status/${pageId}`, {
+                method: 'GET',
+                headers,
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                this.logger.warn(
+                    `Cloud AI server returned error checking status for page ${pageId}: ${response.status} ${errorText}`,
+                );
+                return null;
+            }
+
+            const data = await response.json();
+            return data.hasEmbeddings ?? false;
+        } catch (error: any) {
+            // Check if it's a connection error (server not running)
+            if (error.code === 'ECONNREFUSED' || error.cause?.code === 'ECONNREFUSED') {
+                this.logger.warn(
+                    `Cloud AI server is not available at ${this.cloudAiUrl}. ` +
+                    `Embedding status check will return null.`,
+                );
+            } else {
+                this.logger.error(
+                    `Failed to check embedding status for page ${pageId}`,
+                    error.message || error,
+                );
+            }
+            return null; // Return null to indicate status is unknown
+        }
+    }
 }
