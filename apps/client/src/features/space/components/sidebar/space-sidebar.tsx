@@ -14,6 +14,7 @@ import {
   IconPlus,
   IconSearch,
   IconSettings,
+  IconShield,
   IconTrash,
 } from "@tabler/icons-react";
 import classes from "./space-sidebar.module.css";
@@ -125,6 +126,26 @@ export function SpaceSidebar() {
                   stroke={2}
                 />
                 <span>{t("Space settings")}</span>
+              </div>
+            </UnstyledButton>
+
+            <UnstyledButton
+              component={Link}
+              to={`/s/${spaceSlug}/compliance`}
+              className={clsx(
+                classes.menu,
+                location.pathname === `/s/${spaceSlug}/compliance`
+                  ? classes.activeButton
+                  : "",
+              )}
+            >
+              <div className={classes.menuItemInner}>
+                <IconShield
+                  size={18}
+                  className={classes.menuItemIcon}
+                  stroke={2}
+                />
+                <span>{t("Compliance App")}</span>
               </div>
             </UnstyledButton>
 

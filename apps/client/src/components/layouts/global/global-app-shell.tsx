@@ -75,6 +75,7 @@ export default function GlobalAppShell({
   const isHomeRoute = location.pathname.startsWith("/home");
   const isSpacesRoute = location.pathname === "/spaces";
   const isPageRoute = location.pathname.includes("/p/");
+  const isComplianceRoute = location.pathname.includes("/compliance");
   const hideSidebar = isHomeRoute || isSpacesRoute;
 
   return (
@@ -97,7 +98,7 @@ export default function GlobalAppShell({
           collapsed: { mobile: !isAsideOpen, desktop: !isAsideOpen },
         }
       }
-      padding="md"
+      padding={isComplianceRoute ? 0 : "md"}
     >
       <AppShell.Header px="md" className={classes.header}>
         <AppHeader />

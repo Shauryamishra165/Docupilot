@@ -49,6 +49,7 @@ export class StaticModule implements OnModuleInit {
           : undefined,
         POSTHOG_HOST: this.environmentService.getPostHogHost(),
         POSTHOG_KEY: this.environmentService.getPostHogKey(),
+        COMPLIANCE_APP_URL: this.environmentService.getComplianceAppUrl(),
       };
 
       const windowScriptContent = `<script>window.CONFIG=${JSON.stringify(configString)};</script>`;

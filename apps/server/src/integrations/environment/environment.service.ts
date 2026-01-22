@@ -292,4 +292,11 @@ export class EnvironmentService {
   getExternalServiceTimeout(): string {
     return this.configService.get<string>('EXTERNAL_SERVICE_TIMEOUT', '240000'); // 4 minutes default (240 seconds = 240000ms)
   }
+
+  getComplianceAppUrl(): string {
+    return this.configService.get<string>(
+      'COMPLIANCE_APP_URL',
+      'http://localhost:4000',
+    );
+  }
 }
