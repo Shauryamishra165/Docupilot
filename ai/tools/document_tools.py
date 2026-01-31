@@ -1025,6 +1025,74 @@ def register_document_tools(registry: ToolRegistry):
         handler=clear_formatting_handler
     )
     
+    # Semantic insertion tool - insert content after a specific section
+    insert_after_section_tool = ToolDefinition(
+        name="insert_after_section",
+        description="Insert content after a specific section or heading in a document. Use this for semantic insertion - when you need to add content 'below the introduction' or 'after the summary section'. The system will find the section by title and insert the new content right after it.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "sectionTitle": {
+                    "type": "string",
+                    "description": "The title or text of the section/heading to insert after. The system will search for this text and insert the new content right after that section."
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The content to insert (markdown format). Will be inserted after the specified section."
+                },
+                "contentType": {
+                    "type": "string",
+                    "enum": ["markdown", "html", "text"],
+                    "description": "Format of the content. 'markdown' is recommended for proper formatting. Defaults to 'markdown'."
+                }
+            },
+            "required": ["sectionTitle", "content"]
+        },
+        handler=lambda args, ctx: {"success": True, "message": "insert_after_section operation queued for frontend execution", "willExecuteOnFrontend": True}
+    )
+    
+    # Table editing tool
+    table_edit_tool = ToolDefinition(
+        name="table_edit",
+        description="Edit tables in a document. Supports creating tables, adding/deleting rows and columns, and updating cell content. Use this when the user wants to modify tables.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["create_table", "add_row", "delete_row", "add_column", "delete_column", "update_cell"],
+                    "description": "The action to perform on the table."
+                },
+                "tableIndex": {
+                    "type": "number",
+                    "description": "Which table in the document (0-indexed). Defaults to 0 (first table)."
+                },
+                "rowIndex": {
+                    "type": "number",
+                    "description": "Row index for row operations or cell updates (0-indexed)."
+                },
+                "columnIndex": {
+                    "type": "number",
+                    "description": "Column index for column operations or cell updates (0-indexed)."
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Content for update_cell action or initial content for create_table."
+                },
+                "rows": {
+                    "type": "number",
+                    "description": "Number of rows for create_table action. Defaults to 3."
+                },
+                "columns": {
+                    "type": "number",
+                    "description": "Number of columns for create_table action. Defaults to 3."
+                }
+            },
+            "required": ["action"]
+        },
+        handler=lambda args, ctx: {"success": True, "message": "table_edit operation queued for frontend execution", "willExecuteOnFrontend": True}
+    )
+    
     registry.register(read_document_tool)
     registry.register(replace_document_tool)
     registry.register(insert_content_tool)
@@ -1032,4 +1100,6 @@ def register_document_tools(registry: ToolRegistry):
     registry.register(find_and_replace_tool)
     registry.register(apply_formatting_tool)
     registry.register(clear_formatting_tool)
+    registry.register(insert_after_section_tool)
+    registry.register(table_edit_tool)
 

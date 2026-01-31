@@ -1,0 +1,203 @@
+/* AI Change Tracking Styles - Inline Accept/Reject for AI-made changes */
+/* Changes are APPLIED first, reject will UNDO them */
+
+/* Inserted content - green highlight (new content added) */
+.ai-change-insert {
+  background-color: rgba(76, 175, 80, 0.3);
+  border-bottom: 2px solid #4caf50;
+  border-radius: 2px;
+  position: relative;
+  padding: 0 2px;
+}
+
+/* Replaced content - yellow highlight (content was changed) */
+.ai-change-replace {
+  background-color: rgba(255, 193, 7, 0.35);
+  border-bottom: 2px solid #ffc107;
+  border-radius: 2px;
+  position: relative;
+  padding: 0 2px;
+}
+
+/* Deleted content marker (shown where content was removed) */
+.ai-change-delete-marker {
+  display: inline;
+}
+
+.ai-change-deleted-text {
+  background-color: rgba(244, 67, 54, 0.2);
+  color: #d32f2f;
+  font-size: 0.85em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  border: 1px dashed #f44336;
+  cursor: help;
+}
+
+/* Accept/Reject buttons container */
+.ai-change-buttons {
+  display: inline-flex;
+  gap: 3px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+/* Accept button */
+.ai-change-accept {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: bold;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  padding: 0;
+  background-color: #4caf50;
+  color: white;
+}
+
+.ai-change-accept:hover {
+  background-color: #45a049;
+  transform: scale(1.15);
+}
+
+/* Reject button */
+.ai-change-reject {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: bold;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  padding: 0;
+  background-color: #f44336;
+  color: white;
+}
+
+.ai-change-reject:hover {
+  background-color: #da190b;
+  transform: scale(1.15);
+}
+
+/* Generic change styling */
+.ai-change {
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.ai-change:hover {
+  opacity: 0.85;
+}
+
+/* Animation for new changes - pulse effect */
+@keyframes changeHighlight {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.ai-change[data-new="true"] {
+  animation: changeHighlight 0.8s ease-in-out 3;
+}
+
+/* Bulk action toolbar at top of editor */
+.ai-change-toolbar {
+  display: flex;
+  gap: 10px;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border-radius: 6px;
+  margin-bottom: 10px;
+  align-items: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border: 1px solid #dee2e6;
+}
+
+.ai-change-toolbar-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-right: auto;
+  color: #495057;
+}
+
+.ai-change-toolbar button {
+  padding: 5px 12px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.ai-change-toolbar button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+.ai-change-accept-all {
+  background-color: #4caf50;
+  color: white;
+}
+
+.ai-change-accept-all:hover {
+  background-color: #45a049;
+}
+
+.ai-change-reject-all {
+  background-color: #f44336;
+  color: white;
+}
+
+.ai-change-reject-all:hover {
+  background-color: #da190b;
+}
+
+/* Counter badge showing number of pending changes */
+.ai-change-count {
+  background-color: #2196f3;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: bold;
+  min-width: 20px;
+  text-align: center;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .ai-change-insert {
+    background-color: rgba(76, 175, 80, 0.3);
+  }
+  
+  .ai-change-delete {
+    background-color: rgba(244, 67, 54, 0.3);
+    color: #aaa;
+  }
+  
+  .ai-change-replace {
+    background-color: rgba(255, 193, 7, 0.3);
+  }
+  
+  .ai-change-toolbar {
+    background: linear-gradient(135deg, #2d2d2d 0%, #1a1a1a 100%);
+    border-color: #444;
+  }
+  
+  .ai-change-toolbar-title {
+    color: #e0e0e0;
+  }
+}

@@ -13,13 +13,16 @@ export type AiToolCall =
   | InsertBlockTool
   | FindAndReplaceTool
   | ApplyFormattingTool
-  | ClearFormattingTool;
+  | ClearFormattingTool
+  | InsertAfterSectionTool
+  | TableEditTool;
 
 export interface InsertContentTool {
   tool: 'insert_content';
   params: {
     content: string; // Text/markdown content
     position: 'start' | 'end' | 'cursor' | 'after_selection';
+    contentType?: 'markdown' | 'html' | 'text'; // Content format (default: markdown)
   };
 }
 
@@ -28,6 +31,7 @@ export interface ReplaceContentTool {
   params: {
     content: string; // Text/markdown content
     target: 'selection' | 'all';
+    contentType?: 'markdown' | 'html' | 'text'; // Content format (default: markdown)
   };
 }
 
@@ -83,6 +87,34 @@ export interface ClearFormattingTool {
     range?: { from: number; to: number };  // Optional: use text instead
     text?: string;  // Alternative to range - will find text and get range (with fuzzy fallback)
     useFuzzy?: boolean;  // Enable fuzzy search if exact match not found (default: true)
+  };
+}
+
+/**
+ * Semantic insertion - insert content after a specific section/heading
+ */
+export interface InsertAfterSectionTool {
+  tool: 'insert_after_section';
+  params: {
+    content: string;            // Content to insert (markdown)
+    sectionTitle: string;       // Title/text of the section to insert after
+    contentType?: 'markdown' | 'html' | 'text';
+  };
+}
+
+/**
+ * Table editing - manipulate tables
+ */
+export interface TableEditTool {
+  tool: 'table_edit';
+  params: {
+    action: 'add_row' | 'delete_row' | 'add_column' | 'delete_column' | 'update_cell' | 'create_table';
+    tableIndex?: number;       // Which table in the document (0-indexed)
+    rowIndex?: number;         // For row operations
+    columnIndex?: number;      // For column operations
+    content?: string;          // For update_cell or create_table
+    rows?: number;             // For create_table
+    columns?: number;          // For create_table
   };
 }
 

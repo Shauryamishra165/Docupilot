@@ -1,5 +1,5 @@
 import React, { FC, useState, useRef, useEffect, useMemo } from "react";
-import { Box, Text, Textarea, ActionIcon, ScrollArea, Group, Modal, Button, Stack, Divider } from "@mantine/core";
+import { Box, Text, Textarea, ActionIcon, ScrollArea, Group, Modal, Button, Stack, Divider, Switch } from "@mantine/core";
 import { IconSend, IconSparkles, IconHistory, IconTrash } from "@tabler/icons-react";
 import { useDisclosure } from "@mantine/hooks";
 import { useTranslation } from "react-i18next";
@@ -12,12 +12,19 @@ import { useParams } from "react-router-dom";
 import { extractPageSlugId } from "@/lib";
 import { ToolExecutor } from "@/features/ai/services/tool-executor";
 import type { AiChatResponse } from "@/features/ai/types/ai-tools.types";
+import { AiChangeTracker, AiChange } from "@/features/ai/components/ai-change-tracker";
 
 type Message = {
   id: string;
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
+  toolCalls?: Array<{
+    name: string;
+    status: "pending" | "executing" | "completed" | "failed";
+    result?: string;
+  }>;
+  isStreaming?: boolean;
 };
 
 type AiSidebarProps = {
@@ -37,6 +44,9 @@ export const AiSidebar: FC<AiSidebarProps> = (props) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [previewMode, setPreviewMode] = useState(false); // Sidebar preview mode
+  const [inlineTrackingEnabled, setInlineTrackingEnabled] = useState(true); // Inline accept/reject in editor
+  const [proposedChanges, setProposedChanges] = useState<AiChange[]>([]);
 
   // Create ToolExecutor instance when editor is available
   const toolExecutor = useMemo(() => {
@@ -44,12 +54,67 @@ export const AiSidebar: FC<AiSidebarProps> = (props) => {
       return null;
     }
     try {
-      return new ToolExecutor(editor);
+      const executor = new ToolExecutor(editor);
+      
+      // Set modes
+      executor.setPreviewMode(previewMode);
+      executor.setInlineTracking(inlineTrackingEnabled);
+      
+      // Listen for proposed changes (sidebar mode)
+      executor.onChangeProposed((change: AiChange) => {
+        setProposedChanges((prev) => [...prev, change]);
+      });
+      
+      return executor;
     } catch (error) {
       console.error("[AiSidebar] Failed to create ToolExecutor:", error);
       return null;
     }
   }, [editor]);
+
+  // Update modes when they change
+  useEffect(() => {
+    if (toolExecutor) {
+      toolExecutor.setPreviewMode(previewMode);
+      toolExecutor.setInlineTracking(inlineTrackingEnabled);
+    }
+  }, [previewMode, inlineTrackingEnabled, toolExecutor]);
+
+  const handleAcceptChange = (changeId: string) => {
+    if (toolExecutor) {
+      const success = toolExecutor.applyChange(changeId);
+      if (success) {
+        setProposedChanges((prev) =>
+          prev.map((change) =>
+            change.id === changeId ? { ...change, status: "accepted" as const } : change
+          )
+        );
+      }
+    }
+  };
+
+  const handleRejectChange = (changeId: string) => {
+    if (toolExecutor) {
+      toolExecutor.rejectChange(changeId);
+      setProposedChanges((prev) =>
+        prev.map((change) =>
+          change.id === changeId ? { ...change, status: "rejected" as const } : change
+        )
+      );
+    }
+  };
+
+  const handleAcceptAllChanges = () => {
+    proposedChanges
+      .filter((c) => c.status === "pending")
+      .forEach((change) => handleAcceptChange(change.id));
+  };
+
+  const handleRejectAllChanges = () => {
+    proposedChanges
+      .filter((c) => c.status === "pending")
+      .forEach((change) => handleRejectChange(change.id));
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -114,6 +179,19 @@ export const AiSidebar: FC<AiSidebarProps> = (props) => {
     setInput("");
     setIsLoading(true);
 
+    // Create assistant message that will be updated via streaming
+    const assistantMessageId = (Date.now() + 1).toString();
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      role: "assistant",
+      content: "",
+      timestamp: new Date(),
+      isStreaming: true,
+      toolCalls: [],
+    };
+
+    setMessages((prev) => [...prev, assistantMessage]);
+
     try {
       // Prepare messages for API (include conversation history)
       const apiMessages = [...messages, userMessage].map((msg) => ({
@@ -121,75 +199,178 @@ export const AiSidebar: FC<AiSidebarProps> = (props) => {
         content: msg.content,
       }));
 
-      // Call backend AI chat endpoint (which will route to AI service)
-      // Uses JWT authentication automatically via api client
-      // Pass pageId if available so AI knows which document we're working with
-      const response = await api.post<AiChatResponse>("/external-service/ai/chat", {
-        messages: apiMessages,
-        ...(pageId && { pageId }), // Include pageId if available
+      console.log("[AiSidebar] Starting streaming request...");
+
+      // Use fetch for SSE streaming
+      const response = await fetch("/api/external-service/ai/chat/stream", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          messages: apiMessages,
+          ...(pageId && { pageId }),
+        }),
       });
 
-      // Handle response - it can be either string or AiChatResponse
-      const responseData = response.data as AiChatResponse | string;
-      
-      // Execute tool calls if present
-      let toolCallsExecuted = false;
-      if (typeof responseData === 'object' && responseData?.toolCalls && responseData.toolCalls.length > 0) {
-        if (!toolExecutor) {
-          console.error("[AiSidebar] ToolExecutor not available - editor instance missing");
-        } else {
-          console.log("[AiSidebar] Executing tool calls:", responseData.toolCalls);
-          const results = toolExecutor.executeMultiple(responseData.toolCalls);
-          toolCallsExecuted = results.some(result => result === true);
-          console.log("[AiSidebar] Tool execution results:", results);
-          if (!toolCallsExecuted) {
-            console.warn("[AiSidebar] Some or all tool calls failed to execute");
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) {
+        throw new Error("Response body is not readable");
+      }
+
+      let buffer = "";
+      let currentEventType = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          console.log("[AiSidebar] Stream completed");
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+
+          if (line.startsWith("event: ")) {
+            currentEventType = line.slice(7).trim();
+            console.log("[AiSidebar] Event type:", currentEventType);
+            continue;
+          }
+
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6).trim();
+            
+            try {
+              const event = JSON.parse(data);
+              console.log("[AiSidebar] Received event:", event.type || currentEventType, event);
+
+              setMessages((prev) =>
+                prev.map((msg) => {
+                  if (msg.id !== assistantMessageId) return msg;
+
+                  const eventType = event.type || currentEventType;
+
+                  switch (eventType) {
+                    case "message":
+                      // Append text content
+                      return {
+                        ...msg,
+                        content: (msg.content || "") + (event.content || ""),
+                      };
+
+                    case "tool_calls":
+                      // Add tool calls to message
+                      console.log("[AiSidebar] Adding tool calls:", event.tool_calls);
+                      const newToolCalls = event.tool_calls.map((tc: any) => ({
+                        name: tc.name,
+                        status: "executing" as const,
+                      }));
+                      return {
+                        ...msg,
+                        toolCalls: [...(msg.toolCalls || []), ...newToolCalls],
+                      };
+
+                    case "tool_result":
+                      // Update tool call status
+                      console.log("[AiSidebar] Tool result for:", event.tool_name);
+                      return {
+                        ...msg,
+                        toolCalls: (msg.toolCalls || []).map((tc) =>
+                          tc.name === event.tool_name
+                            ? { ...tc, status: "completed" as const, result: event.content }
+                            : tc
+                        ),
+                      };
+
+                    case "pending_tools":
+                      // Execute pending tools in frontend
+                      console.log("[AiSidebar] Executing pending tools:", event.tools);
+                      if (toolExecutor && event.tools) {
+                        event.tools.forEach((tool: any) => {
+                          console.log("[AiSidebar] Executing tool:", tool);
+                          try {
+                            const success = toolExecutor.execute(tool);
+                            console.log(`[AiSidebar] Tool ${tool.tool} executed:`, success);
+                            
+                            // Update tool status in message
+                            setMessages((msgs) =>
+                              msgs.map((m) => {
+                                if (m.id !== assistantMessageId) return m;
+                                return {
+                                  ...m,
+                                  toolCalls: (m.toolCalls || []).map((tc) =>
+                                    tc.name === tool.tool
+                                      ? { ...tc, status: success ? ("completed" as const) : ("failed" as const) }
+                                      : tc
+                                  ),
+                                };
+                              })
+                            );
+                          } catch (err) {
+                            console.error(`[AiSidebar] Tool execution error for ${tool.tool}:`, err);
+                          }
+                        });
+                      } else {
+                        console.warn("[AiSidebar] ToolExecutor not available or no tools to execute");
+                      }
+                      return msg;
+
+                    case "done":
+                      // Mark streaming complete
+                      console.log("[AiSidebar] Stream done");
+                      return {
+                        ...msg,
+                        isStreaming: false,
+                      };
+
+                    case "error":
+                      // Handle error
+                      console.error("[AiSidebar] Stream error:", event.error);
+                      return {
+                        ...msg,
+                        content: msg.content || `Error: ${event.error}`,
+                        isStreaming: false,
+                      };
+
+                    default:
+                      return msg;
+                  }
+                })
+              );
+            } catch (e) {
+              // Ignore parse errors for incomplete chunks
+              console.debug("[AiSidebar] SSE parse error:", e, "Line:", line);
+            }
           }
         }
       }
 
-      // Extract message content - handle both string and AiChatResponse types
-      // Priority: toolCalls > message > fallback
-      let messageContent: string;
-      if (typeof responseData === 'string') {
-        messageContent = responseData;
-      } else if (responseData?.toolCalls && responseData.toolCalls.length > 0) {
-        // If toolCalls exist, show success message (regardless of whether they executed)
-        // This handles cases where AI returns toolCalls but no text message
-        if (toolCallsExecuted) {
-          messageContent = `I've ${responseData.toolCalls.length === 1 ? 'completed the action' : `completed ${responseData.toolCalls.length} actions`} on your page.`;
-        } else {
-          // ToolCalls exist but execution failed - still acknowledge the attempt
-          messageContent = `I attempted to ${responseData.toolCalls.length === 1 ? 'perform the action' : `perform ${responseData.toolCalls.length} actions`}, but encountered an issue.`;
-        }
-      } else if (responseData?.message) {
-        // Show AI's text message if no toolCalls
-        messageContent = responseData.message;
-      } else {
-        // Fallback only if no toolCalls and no message
-        messageContent = "Sorry, I couldn't generate a response.";
-      }
-
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: messageContent,
-        timestamp: new Date(),
-      };
-
-      setMessages((prev) => [...prev, assistantMessage]);
-      
-      // Reload chat history after sending message
+      // Reload chat history after streaming completes
       loadChatHistory();
     } catch (error) {
-      console.error("Error calling AI service:", error);
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: "Sorry, there was an error connecting to the AI service. Please try again.",
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
+      console.error("[AiSidebar] Error calling AI service:", error);
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === assistantMessageId
+            ? {
+                ...msg,
+                content: "Sorry, there was an error connecting to the AI service. Please try again.",
+                isStreaming: false,
+              }
+            : msg
+        )
+      );
     } finally {
       setIsLoading(false);
     }
@@ -205,15 +386,35 @@ export const AiSidebar: FC<AiSidebarProps> = (props) => {
   return (
     <>
       <Box className={classes.container}>
-        <ActionIcon
-          variant="subtle"
-          size="sm"
-          onClick={openHistory}
-          className={classes.historyButton}
-          title={t("Chat History")}
-        >
-          <IconHistory size={16} stroke={1.5} />
-        </ActionIcon>
+        <Group justify="space-between" p="xs" style={{ borderBottom: "1px solid var(--mantine-color-gray-3)" }}>
+          <ActionIcon
+            variant="subtle"
+            size="sm"
+            onClick={openHistory}
+            title={t("Chat History")}
+          >
+            <IconHistory size={16} stroke={1.5} />
+          </ActionIcon>
+          
+          <Group gap="xs">
+            <Switch
+              size="xs"
+              label={t("Inline")}
+              checked={inlineTrackingEnabled}
+              onChange={(event) => {
+                setInlineTrackingEnabled(event.currentTarget.checked);
+                // If inline is enabled, disable sidebar preview
+                if (event.currentTarget.checked) {
+                  setPreviewMode(false);
+                }
+              }}
+              styles={{
+                label: { fontSize: "10px" },
+              }}
+              title={t("Show changes inline with accept/reject buttons")}
+            />
+          </Group>
+        </Group>
 
         <ScrollArea
           ref={scrollAreaRef}
@@ -243,12 +444,75 @@ export const AiSidebar: FC<AiSidebarProps> = (props) => {
                 >
                   <Box className={classes.messageContent}>
                     {message.role === "assistant" ? (
-                      <div
-                        className={classes.markdownContent}
-                        dangerouslySetInnerHTML={{
-                          __html: DOMPurify.sanitize(markdownToHtml(message.content) as string),
-                        }}
-                      />
+                      <>
+                        {/* Show tool calls if any */}
+                        {message.toolCalls && message.toolCalls.length > 0 && (
+                          <Box mb="xs">
+                            {message.toolCalls.map((toolCall, idx) => (
+                              <Box
+                                key={idx}
+                                p="xs"
+                                mb="xs"
+                                style={{
+                                  backgroundColor: "var(--mantine-color-gray-0)",
+                                  borderRadius: "var(--mantine-radius-sm)",
+                                  border: "1px solid var(--mantine-color-gray-3)",
+                                }}
+                              >
+                                <Group gap="xs">
+                                  {toolCall.status === "pending" && (
+                                    <IconSparkles size={14} color="gray" />
+                                  )}
+                                  {toolCall.status === "executing" && (
+                                    <IconSparkles size={14} color="blue" />
+                                  )}
+                                  {toolCall.status === "completed" && (
+                                    <IconSparkles size={14} color="green" />
+                                  )}
+                                  {toolCall.status === "failed" && (
+                                    <IconSparkles size={14} color="red" />
+                                  )}
+                                  <Text size="xs" fw={500}>
+                                    {toolCall.name.replace(/_/g, " ")}
+                                  </Text>
+                                  {toolCall.status === "completed" && (
+                                    <Text size="xs" c="dimmed">
+                                      ✓
+                                    </Text>
+                                  )}
+                                  {toolCall.status === "failed" && (
+                                    <Text size="xs" c="red">
+                                      ✗
+                                    </Text>
+                                  )}
+                                </Group>
+                                {toolCall.result && (
+                                  <Text size="xs" c="dimmed" mt="xs">
+                                    {toolCall.result}
+                                  </Text>
+                                )}
+                              </Box>
+                            ))}
+                          </Box>
+                        )}
+                        
+                        {/* Show message content */}
+                        {message.content && (
+                          <div
+                            className={classes.markdownContent}
+                            dangerouslySetInnerHTML={{
+                              __html: DOMPurify.sanitize(markdownToHtml(message.content) as string),
+                            }}
+                          />
+                        )}
+                        
+                        {/* Show streaming indicator */}
+                        {message.isStreaming && (
+                          <Text size="sm" c="dimmed">
+                            {t("Thinking...")}
+                          </Text>
+                        )}
+                      </>
                     ) : (
                       <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
                         {message.content}
@@ -257,15 +521,6 @@ export const AiSidebar: FC<AiSidebarProps> = (props) => {
                   </Box>
                 </Box>
               ))
-            )}
-            {isLoading && (
-              <Box className={clsx(classes.message, classes.assistantMessage)}>
-                <Box className={classes.messageContent}>
-                  <Text size="sm" c="dimmed">
-                    {t("Thinking...")}
-                  </Text>
-                </Box>
-              </Box>
             )}
             <div ref={messagesEndRef} />
           </Box>
@@ -352,6 +607,18 @@ export const AiSidebar: FC<AiSidebarProps> = (props) => {
           )}
         </Stack>
       </Modal>
+
+      {/* AI Change Tracker */}
+      {previewMode && proposedChanges.length > 0 && (
+        <AiChangeTracker
+          editor={editor}
+          changes={proposedChanges}
+          onAccept={handleAcceptChange}
+          onReject={handleRejectChange}
+          onAcceptAll={handleAcceptAllChanges}
+          onRejectAll={handleRejectAllChanges}
+        />
+      )}
     </>
   );
 };

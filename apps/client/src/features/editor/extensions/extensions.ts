@@ -81,6 +81,7 @@ import i18n from "@/i18n.ts";
 import { MarkdownClipboard } from "@/features/editor/extensions/markdown-clipboard.ts";
 import EmojiCommand from "./emoji-command";
 import { countWords } from "alfaaz";
+import { ChangeTrackingExtension } from "@/features/ai/extensions/change-tracking.extension";
 
 const lowlight = createLowlight(common);
 lowlight.register("mermaid", plaintext);
@@ -251,6 +252,8 @@ export const mainExtensions = [
       };
     },
   }).configure(),
+  // AI Change Tracking Extension for inline accept/reject
+  ChangeTrackingExtension,
 ] as any;
 
 type CollabExtensions = (provider: HocuspocusProvider, user: IUser) => any[];

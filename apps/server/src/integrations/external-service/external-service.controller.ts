@@ -10,7 +10,9 @@ import {
   Param,
   UseGuards,
   Logger,
+  Res,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { ExternalServiceService } from './external-service.service';
 import { AiChatService } from './ai-chat.service';
 import { RateLimiterService } from './rate-limiter.service';
@@ -130,6 +132,70 @@ export class ExternalServiceController {
     );
 
     return this.aiChatService.sendChatMessage(dto, workspace, user.id);
+  }
+
+  /**
+   * AI Chat Streaming endpoint (SSE)
+   * Requires workspace edit permission
+   * Rate limited: 30 requests per minute per user/workspace
+   * Returns Server-Sent Events for real-time updates
+   */
+  @HttpCode(HttpStatus.OK)
+  @Post('ai/chat/stream')
+  async aiChatStream(
+    @Body() dto: AiChatRequestDto,
+    @AuthUser() user: User,
+    @AuthWorkspace() workspace: Workspace,
+    @Res() res: any, // Use any to access raw Fastify response
+  ): Promise<void> {
+    // Check workspace permissions
+    const ability = this.workspaceAbility.createForUser(user, workspace);
+    if (ability.cannot(WorkspaceCaslAction.Edit, WorkspaceCaslSubject.Settings)) {
+      this.logger.warn(
+        `User ${user.id} attempted to use AI chat stream without permission (workspace: ${workspace.id})`,
+      );
+      throw new ForbiddenException('Insufficient permissions to use AI chat');
+    }
+
+    // Validate messages
+    if (!dto.messages || dto.messages.length === 0) {
+      throw new ForbiddenException('At least one message is required');
+    }
+
+    // Validate last message is from user
+    const lastMessage = dto.messages[dto.messages.length - 1];
+    if (lastMessage.role !== 'user') {
+      throw new ForbiddenException('Last message must be from user');
+    }
+
+    // Check rate limit (30 requests per minute)
+    await this.rateLimiterService.checkRateLimit(user.id, workspace.id, 30, 60000);
+
+    this.logger.log(
+      `User ${user.id} using AI chat stream (workspace: ${workspace.id}, message count: ${dto.messages.length})`,
+    );
+
+    // Get the raw Node.js response object from Fastify
+    // Fastify wraps the response, we need the raw HTTP response for SSE
+    const rawRes = res.raw || res;
+
+    // Set SSE headers using Fastify's header method
+    res.header('Content-Type', 'text/event-stream');
+    res.header('Cache-Control', 'no-cache');
+    res.header('Connection', 'keep-alive');
+    res.header('X-Accel-Buffering', 'no'); // Disable nginx buffering
+
+    // Stream the response using raw response
+    try {
+      for await (const chunk of this.aiChatService.streamChatMessage(dto, workspace, user.id)) {
+        rawRes.write(chunk);
+      }
+      rawRes.end();
+    } catch (error) {
+      this.logger.error('AI chat stream error', error);
+      rawRes.write(`event: error\ndata: ${JSON.stringify({ error: 'Stream error' })}\n\n`);
+      rawRes.end();
+    }
   }
 
   /**

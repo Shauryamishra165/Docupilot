@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import os
@@ -13,7 +14,9 @@ import google.generativeai as genai
 from tools.tool_registry import tool_registry
 from tools.document_tools import register_document_tools
 from tools.vector_search_tools import register_vector_search_tools
+from tools.workspace_tools import register_workspace_tools
 from text_transform import create_text_transform_endpoint
+from agents.document_agent import run_document_agent, get_document_agent
 
 # Configure logging
 logging.basicConfig(
@@ -73,6 +76,7 @@ except Exception as e:
 # Register all tools
 register_document_tools(tool_registry)
 register_vector_search_tools(tool_registry)
+register_workspace_tools(tool_registry)
 tools_list = tool_registry.list_tools()
 logger.info(f"Tool registry initialized: {len(tools_list)} tool group(s) registered")
 for tool_group in tools_list:
@@ -194,7 +198,12 @@ async def chat(
     x_page_id: Optional[str] = Header(None)
 ):
     """
-    Chat endpoint with tool support
+    Chat endpoint - now uses LangGraph agent by default for intelligent, context-aware responses.
+    
+    This endpoint now delegates to the intelligent document agent which has:
+    - Full workspace awareness
+    - Semantic search capabilities
+    - Proper tool execution with context
     
     Context is automatically passed from headers:
     - x_workspace_id: Current workspace ID
@@ -206,361 +215,65 @@ async def chat(
     start_time = datetime.now()
     chat_id = str(uuid.uuid4())
     
+    logger.info("=" * 80)
+    logger.info(f"[CHAT] Using LangGraph agent (delegating to /api/agent/chat)")
+    logger.info(f"[CHAT] Chat ID: {chat_id}")
+    logger.info(f"[CHAT] Workspace: {x_workspace_id}, User: {x_user_id}, Page: {request.pageId or x_page_id}")
+    
     try:
-        # Prepare context for tools (workspace, user, page)
-        page_id = request.pageId or x_page_id
-        context = {
-            "workspaceId": x_workspace_id,
-            "userId": x_user_id,
-            "pageId": page_id,
-        }
+        # Validate request
+        if not request.messages:
+            raise HTTPException(status_code=400, detail="Messages are required")
         
-        logger.info("=" * 80)
-        logger.info(f"[CHAT REQUEST] Chat ID: {chat_id}")
-        logger.info(f"[CHAT REQUEST] Workspace ID: {x_workspace_id}")
-        logger.info(f"[CHAT REQUEST] User ID: {x_user_id}")
-        logger.info(f"[CHAT REQUEST] Page ID: {page_id}")
-        logger.info(f"[CHAT REQUEST] Message count: {len(request.messages)}")
-        logger.info(f"[CHAT REQUEST] Last user message: {request.messages[-1].content[:100]}..." if len(request.messages[-1].content) > 100 else f"[CHAT REQUEST] Last user message: {request.messages[-1].content}")
-        
-        # Build conversation history from previous messages (excluding the last user message)
-        history = []
-        for msg in request.messages[:-1]:  # Exclude last message
-            if msg.role == "user":
-                history.append({"role": "user", "parts": [msg.content]})
-            elif msg.role == "assistant":
-                history.append({"role": "model", "parts": [msg.content]})
-        
-        logger.info(f"[CHAT PROCESSING] Built conversation history with {len(history)} previous messages")
-        
-        # Get the last user message
         last_message = request.messages[-1]
         if last_message.role != "user":
             raise HTTPException(status_code=400, detail="Last message must be from user")
         
-        # Log context information (workspace, user, page IDs are available in headers/body)
-        if page_id:
-            logger.info(f"[CONTEXT] Page ID available: {page_id} (AI can use read_document tool if needed)")
+        if not x_workspace_id:
+            raise HTTPException(status_code=400, detail="X-Workspace-Id header is required")
         
-        # Get tools for function calling
-        tools = tool_registry.list_tools()
-        logger.info(f"[TOOL REGISTRY] Available tools: {len(tools)} tool group(s) registered")
-        if tools:
-            for tool_group in tools:
-                func_decls = tool_group.get("function_declarations", [])
-                logger.info(f"[TOOL REGISTRY] Tool group has {len(func_decls)} function(s)")
-                for func_decl in func_decls:
-                    logger.info(f"[TOOL REGISTRY] - Tool: {func_decl.get('name')} - {func_decl.get('description', '')[:50]}")
+        if not x_user_id:
+            raise HTTPException(status_code=400, detail="X-User-Id header is required")
         
-        # Start a chat session with history
-        logger.info("[LLM] Starting chat session with Gemini")
-        logger.info(f"[LLM] History messages: {len(history)}")
-        chat_session = model.start_chat(history=history)
+        # Get page ID from request or header
+        page_id = request.pageId or x_page_id
         
-        logger.info(f"[LLM] Sending message to Gemini model")
-        logger.info(f"[LLM INPUT] User message length: {len(last_message.content)} characters")
-        logger.info(f"[LLM INPUT] User message preview: {last_message.content[:200]}..." if len(last_message.content) > 200 else f"[LLM INPUT] User message: {last_message.content}")
+        # Build message history (excluding last message)
+        message_history = [
+            {"role": msg.role, "content": msg.content}
+            for msg in request.messages[:-1]
+        ]
         
-        # Try to use function calling if available (requires google-generativeai >= 0.8.0)
-        try:
-            if tools:
-                logger.info(f"[LLM] Attempting to use function calling with {len(tools)} tool group(s)")
-                # Try passing tools to send_message (works with newer API versions)
-                response = chat_session.send_message(last_message.content, tools=tools)
-                logger.info(f"[LLM] Function calling enabled - AI can automatically use tools")
-            else:
-                logger.info("[LLM] No tools registered, sending without function calling")
-                response = chat_session.send_message(last_message.content)
-        except TypeError as e:
-            # Fallback if tools parameter not supported (old API version)
-            logger.warning(f"[LLM] Function calling not supported in this API version: {str(e)}")
-            logger.info("[LLM] Falling back to sending without tools (using auto-read workaround)")
-            response = chat_session.send_message(last_message.content)
-        except Exception as e:
-            logger.error(f"[LLM] Error sending message: {str(e)}")
-            logger.info("[LLM] Falling back to sending without tools")
-        response = chat_session.send_message(last_message.content)
+        logger.info(f"[CHAT] Query: {last_message.content[:100]}...")
         
-        logger.info(f"[LLM OUTPUT] Received response from Gemini")
-        logger.info(f"[LLM OUTPUT] Response type: {type(response).__name__}")
+        # Use the LangGraph agent for intelligent, context-aware responses
+        result = await run_document_agent(
+            query=last_message.content,
+            workspace_id=x_workspace_id,
+            user_id=x_user_id,
+            page_id=page_id,
+            message_history=message_history,
+        )
         
-        # Safely get response text (may fail if response contains function calls)
-        response_text = ""
-        try:
-            if hasattr(response, 'text'):
-                response_text = response.text
-                logger.info(f"[LLM OUTPUT] Response text length: {len(response_text)} characters")
-                if response_text:
-                    preview = response_text[:300] + "..." if len(response_text) > 300 else response_text
-                    logger.info(f"[LLM OUTPUT] Response preview: {preview}")
-        except ValueError as e:
-            # Response contains function calls, can't convert to text directly
-            logger.info(f"[LLM OUTPUT] Response contains function calls (cannot convert to text: {str(e)})")
-            response_text = ""
+        duration = (datetime.now() - start_time).total_seconds()
         
-        # Handle function calls if any
-        # Write tools will be returned as toolCalls for frontend execution
-        # Read tools will be executed here (read_document)
-        final_response_text = response_text
-        function_calls_processed = []
-        tool_calls_for_frontend = []  # Write operations to return to frontend
-        max_iterations = 5  # Prevent infinite loops
-        iteration = 0
-        has_read_tools_executed = False  # Track if any read tools were executed
-        
-        # Check if response contains function calls
-        # Note: Function calling may not work with google-generativeai 0.3.2
-        logger.info("[LLM] Checking response structure for function calls...")
-        if hasattr(response, 'candidates') and response.candidates:
-            logger.info(f"[LLM] Response has {len(response.candidates)} candidate(s)")
-            candidate = response.candidates[0]
-            logger.info(f"[LLM] Candidate type: {type(candidate).__name__}")
-            if hasattr(candidate, 'content') and candidate.content:
-                if hasattr(candidate.content, 'parts'):
-                    parts = candidate.content.parts
-                    logger.info(f"[LLM] Response has {len(parts)} part(s)")
-                    for i, part in enumerate(parts):
-                        logger.info(f"[LLM] Part {i} type: {type(part).__name__}")
-                        # Check for function calls without accessing .text
-                        if hasattr(part, 'function_call') and part.function_call:
-                            func_name = getattr(part.function_call, 'name', None)
-                            if func_name and func_name.strip():
-                                logger.info(f"[LLM] FUNCTION CALL DETECTED in part {i}: {func_name}")
-                            else:
-                                logger.info(f"[LLM] Part {i} has function_call attribute but name is empty")
-        
-        while iteration < max_iterations:
-            iteration += 1
-            function_call_found = False
-            
-            if hasattr(response, 'candidates') and response.candidates:
-                candidate = response.candidates[0]
-                if hasattr(candidate, 'content') and candidate.content:
-                    parts = candidate.content.parts
-                    for part in parts:
-                        # Check if this part is actually a function call with a valid name
-                        if hasattr(part, 'function_call') and part.function_call:
-                            # Get function name and validate it's not empty
-                            function_name = getattr(part.function_call, 'name', None)
-                            if not function_name or not function_name.strip():
-                                logger.warning(f"[TOOL EXECUTION] Detected function_call but name is empty, skipping this part")
-                                continue
-                            
-                            function_call_found = True
-                            # Get function arguments
-                            function_args_raw = getattr(part.function_call, 'args', None)
-                            function_args = {}
-                            if function_args_raw:
-                                if isinstance(function_args_raw, str):
-                                    try:
-                                        function_args = json.loads(function_args_raw)
-                                    except json.JSONDecodeError:
-                                        logger.warning(f"[TOOL EXECUTION] Failed to parse function args as JSON, using empty dict")
-                                        function_args = {}
-                                else:
-                                    # Convert MapComposite or other dict-like objects to regular dict
-                                    try:
-                                        if hasattr(function_args_raw, '__iter__') and not isinstance(function_args_raw, str):
-                                            # Try to convert to dict (works for MapComposite, dict, etc.)
-                                            if hasattr(function_args_raw, 'items'):
-                                                function_args = dict(function_args_raw.items())
-                                            elif hasattr(function_args_raw, '__dict__'):
-                                                function_args = dict(function_args_raw.__dict__)
-                                            else:
-                                                # Try to iterate and build dict
-                                                try:
-                                                    function_args = dict(function_args_raw)
-                                                except (TypeError, ValueError):
-                                                    logger.warning(f"[TOOL EXECUTION] Could not convert function args to dict, using empty dict")
-                                                    function_args = {}
-                                        else:
-                                            function_args = function_args_raw
-                                    except Exception as e:
-                                        logger.warning(f"[TOOL EXECUTION] Error converting function args to dict: {str(e)}, using empty dict")
-                                        function_args = {}
-                            
-                            logger.info("=" * 80)
-                            logger.info(f"[TOOL EXECUTION] Iteration {iteration}")
-                            logger.info(f"[TOOL EXECUTION] Function name: {function_name}")
-                            # Safely serialize function arguments (may contain non-JSON types from Gemini)
-                            try:
-                                function_args_str = json.dumps(function_args, indent=2, default=str)
-                                logger.info(f"[TOOL EXECUTION] Function arguments: {function_args_str}")
-                            except (TypeError, ValueError) as e:
-                                # If serialization fails, convert to string representation
-                                logger.info(f"[TOOL EXECUTION] Function arguments: {str(function_args)}")
-                            logger.info(f"[TOOL EXECUTION] Context: workspace={context.get('workspaceId')}, user={context.get('userId')}, page={context.get('pageId')}")
-                            
-                            # Determine if this is a write operation (should be returned as toolCall)
-                            # Read operations (read_document) are executed here
-                            # Write operations are returned to frontend for execution
-                            write_tools = ["insert_content", "replace_document", "replace_range", "find_and_replace", "apply_formatting", "clear_formatting"]
-                            is_write_operation = function_name in write_tools
-                            
-                            if is_write_operation:
-                                # For write operations, collect as toolCall for frontend execution
-                                logger.info(f"[TOOL EXECUTION] Write operation detected: {function_name} - collecting as toolCall for frontend")
-                                
-                                # Convert to frontend-compatible toolCall format
-                                tool_call = {
-                                    "tool": function_name,
-                                    "params": function_args
-                                }
-                                
-                                # Map tool names to frontend format if needed
-                                if function_name == "replace_document":
-                                    tool_call["tool"] = "replace_content"
-                                    tool_call["params"] = {
-                                        "content": function_args.get("content", ""),
-                                        "target": "all"
-                                    }
-                                elif function_name == "insert_content":
-                                    # Ensure position is included (default to 'cursor' if not provided)
-                                    tool_call["params"] = {
-                                        "content": function_args.get("content", ""),
-                                        "position": function_args.get("position", "cursor")  # Default to 'cursor' if not specified
-                                    }
-                                elif function_name == "replace_range":
-                                    # Replace range can be mapped to replace_content with selection
-                                    # But we need to keep it as a separate tool or map it differently
-                                    # For now, we'll keep it as replace_range and handle it in frontend
-                                    pass
-                                elif function_name == "find_and_replace":
-                                    # find_and_replace is already in the correct format
-                                    # Default replaceAll to True if not specified (more intuitive for bulk replacements)
-                                    # Only set to False if explicitly requested
-                                    replace_all = function_args.get("replaceAll")
-                                    if replace_all is None:
-                                        replace_all = True  # Default to True for better UX
-                                    
-                                    tool_call["params"] = {
-                                        "searchText": function_args.get("searchText", ""),
-                                        "replaceText": function_args.get("replaceText", ""),
-                                        "replaceAll": replace_all,
-                                        "caseSensitive": function_args.get("caseSensitive", False)
-                                    }
-                                elif function_name == "apply_formatting":
-                                    # Ensure all params are included (including text and useFuzzy)
-                                    tool_call["params"] = {
-                                        "format": function_args.get("format", ""),
-                                        "range": function_args.get("range"),
-                                        "text": function_args.get("text"),
-                                        "useFuzzy": function_args.get("useFuzzy", True),  # Default to True
-                                        "attrs": function_args.get("attrs")
-                                    }
-                                elif function_name == "clear_formatting":
-                                    # Ensure all params are included (including text and useFuzzy)
-                                    tool_call["params"] = {
-                                        "range": function_args.get("range"),
-                                        "text": function_args.get("text"),
-                                        "useFuzzy": function_args.get("useFuzzy", True)  # Default to True
-                                    }
-                                
-                                tool_calls_for_frontend.append(tool_call)
-                                logger.info(f"[TOOL EXECUTION] Added toolCall to frontend list: {tool_call}")
-                                
-                                # Don't execute write tools - just collect them
-                                # Continue to next part/function call in this response
-                                function_call_found = True
-                                continue  # Continue to next part, not break
-                            
-                            # Execute read tools (e.g., read_document)
-                            has_read_tools_executed = True  # Mark that we're executing a read tool
-                            tool_start_time = datetime.now()
-                            tool_result = tool_registry.execute_tool(function_name, function_args, context)
-                            tool_duration = (datetime.now() - tool_start_time).total_seconds()
-                            
-                            logger.info(f"[TOOL EXECUTION] Tool executed in {tool_duration:.2f}s")
-                            logger.info(f"[TOOL EXECUTION] Tool result success: {tool_result.get('success', False)}")
-                            if tool_result.get('success'):
-                                logger.info(f"[TOOL EXECUTION] Tool result preview: {str(tool_result.get('result', {}))[:200]}...")
-                            else:
-                                logger.warning(f"[TOOL EXECUTION] Tool error: {tool_result.get('error', 'Unknown error')}")
-                            
-                            function_calls_processed.append({
-                                "name": function_name,
-                                "result": tool_result,
-                                "duration": tool_duration
-                            })
-                            
-                            # Send function result back to model
-                            # Only send if tool execution was successful
-                            if tool_result.get('success', False):
-                                logger.info(f"[LLM] Sending tool result back to Gemini for function: {function_name}")
-                                try:
-                                    function_response = chat_session.send_message({
-                                        "function_response": {
-                                            "name": function_name,
-                                            "response": tool_result.get('result', {})
-                                        }
-                                    })
-                                    response = function_response
-                                    # Safely get text from function response
-                                    try:
-                                        if hasattr(function_response, 'text'):
-                                            final_response_text = function_response.text
-                                            logger.info(f"[LLM OUTPUT] Updated response after tool execution: {len(final_response_text)} characters")
-                                        else:
-                                            logger.info(f"[LLM OUTPUT] Function response has no text attribute")
-                                    except ValueError as e:
-                                        # Function response might contain another function call
-                                        logger.info(f"[LLM OUTPUT] Function response contains function calls, will process in next iteration")
-                                        final_response_text = ""  # Will be updated in next iteration
-                                except Exception as e:
-                                    logger.error(f"[LLM] Error sending function response back to Gemini: {str(e)}")
-                                    # Continue with the original response if sending function response fails
-                                    logger.info("[LLM] Continuing with original response")
-                            else:
-                                logger.warning(f"[LLM] Tool execution failed, not sending function response to Gemini")
-                                logger.warning(f"[LLM] Error: {tool_result.get('error', 'Unknown error')}")
-                            break
-            
-            # Break if no function calls found, or if we only have write tools (no read tools to execute)
-            if not function_call_found:
-                if iteration == 1:
-                    logger.info("[LLM] No function calls detected in response (this is normal with current API version)")
-                break
-            elif function_call_found and not has_read_tools_executed:
-                # We found write tools but no read tools - break since we're just collecting toolCalls
-                logger.info("[LLM] Only write tools detected - collecting as toolCalls for frontend, no need to continue loop")
-                break
-        
-        if iteration >= max_iterations:
-            logger.warning(f"[TOOL EXECUTION] Reached maximum iterations ({max_iterations}), stopping function call loop")
-        elif iteration > 0:
-            logger.info(f"[TOOL EXECUTION] Processed {len(function_calls_processed)} function call(s) in {iteration} iteration(s)")
-        
-        total_duration = (datetime.now() - start_time).total_seconds()
-        logger.info("=" * 80)
-        logger.info(f"[CHAT COMPLETE] Chat ID: {chat_id}")
-        logger.info(f"[CHAT COMPLETE] Total duration: {total_duration:.2f}s")
-        logger.info(f"[CHAT COMPLETE] Function calls executed: {len(function_calls_processed)}")
-        logger.info(f"[CHAT COMPLETE] Final response length: {len(final_response_text)} characters")
-        logger.info(f"[CHAT COMPLETE] Response preview: {final_response_text[:200]}..." if len(final_response_text) > 200 else f"[CHAT COMPLETE] Response: {final_response_text}")
+        logger.info(f"[CHAT] Agent completed in {duration:.2f}s")
+        logger.info(f"[CHAT] Success: {result.get('success', False)}")
+        logger.info(f"[CHAT] Tool calls: {len(result.get('toolCalls') or [])}")
         logger.info("=" * 80)
         
-        # Add assistant response to messages
-        all_messages = request.messages + [Message(role="assistant", content=final_response_text)]
-        
-        # Save chat history if workspace and user IDs are provided
+        # Save chat history
+        all_messages = request.messages + [Message(role="assistant", content=result.get("message", ""))]
         if x_workspace_id and x_user_id:
-            logger.info(f"[CHAT HISTORY] Saving chat history for workspace={x_workspace_id}, user={x_user_id}")
             save_chat_history(chat_id, all_messages, x_workspace_id, x_user_id)
-            logger.info(f"[CHAT HISTORY] Chat history saved with ID: {chat_id}")
         
-        # Prepare response with toolCalls if any
-        response_data = {
-            "message": final_response_text if final_response_text else None,
-            "success": True,
-            "chatId": chat_id
-        }
+        return ChatResponse(
+            message=result.get("message"),
+            success=result.get("success", True),
+            chatId=chat_id,
+            toolCalls=result.get("toolCalls"),
+        )
         
-        # Include toolCalls if any were collected
-        if tool_calls_for_frontend:
-            response_data["toolCalls"] = tool_calls_for_frontend
-            logger.info(f"[CHAT COMPLETE] Returning {len(tool_calls_for_frontend)} tool call(s) to frontend")
-        
-        return ChatResponse(**response_data)
     except HTTPException:
         raise
     except Exception as e:
@@ -583,6 +296,122 @@ async def chat(
                 detail="Invalid Gemini API key. Please check your GEMINI_API_KEY in the .env file."
             )
         raise HTTPException(status_code=500, detail=f"Error generating response: {error_msg}")
+
+@app.post("/api/chat/stream", dependencies=[Depends(verify_api_key)])
+async def chat_stream(
+    request: ChatRequest,
+    x_workspace_id: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_page_id: Optional[str] = Header(None)
+):
+    """
+    Streaming chat endpoint - uses LangGraph agent with SSE streaming.
+    
+    Streams responses as Server-Sent Events (SSE) for real-time updates.
+    Events include:
+    - message: Text response chunks
+    - tool_calls: Tool calls being made
+    - tool_result: Tool execution results
+    - pending_tools: Tool calls to execute on frontend
+    - done: Stream completion
+    - error: Error events
+    """
+    chat_id = str(uuid.uuid4())
+    
+    logger.info("=" * 80)
+    logger.info(f"[CHAT STREAM] Starting streaming chat")
+    logger.info(f"[CHAT STREAM] Chat ID: {chat_id}")
+    logger.info(f"[CHAT STREAM] Workspace: {x_workspace_id}, User: {x_user_id}, Page: {request.pageId or x_page_id}")
+    logger.info(f"[CHAT STREAM] Messages count: {len(request.messages)}")
+    
+    try:
+        # Validate request
+        if not request.messages:
+            raise HTTPException(status_code=400, detail="Messages are required")
+        
+        last_message = request.messages[-1]
+        if last_message.role != "user":
+            raise HTTPException(status_code=400, detail="Last message must be from user")
+        
+        if not x_workspace_id:
+            raise HTTPException(status_code=400, detail="X-Workspace-Id header is required")
+        
+        if not x_user_id:
+            raise HTTPException(status_code=400, detail="X-User-Id header is required")
+        
+        # Get page ID from request or header
+        page_id = request.pageId or x_page_id
+        
+        # Build message history (excluding last message)
+        message_history = [
+            {"role": msg.role, "content": msg.content}
+            for msg in request.messages[:-1]
+        ]
+        
+        logger.info(f"[CHAT STREAM] Query: {last_message.content[:100]}...")
+        
+        # Create SSE streaming generator
+        async def event_generator():
+            event_count = 0
+            try:
+                agent = get_document_agent()
+                
+                logger.info("[CHAT STREAM] Starting agent stream...")
+                
+                # Stream events from agent
+                async for event in agent.run_stream(
+                    query=last_message.content,
+                    workspace_id=x_workspace_id,
+                    user_id=x_user_id,
+                    page_id=page_id,
+                    message_history=message_history,
+                ):
+                    event_count += 1
+                    # Format as SSE event
+                    event_type = event.get("type", "message")
+                    data = json.dumps(event)
+                    sse_message = f"event: {event_type}\ndata: {data}\n\n"
+                    
+                    logger.info(f"[CHAT STREAM] Yielding event #{event_count}: {event_type}")
+                    
+                    yield sse_message
+                    
+                    # Small delay to ensure proper SSE formatting
+                    import asyncio
+                    await asyncio.sleep(0.01)
+                
+                logger.info(f"[CHAT STREAM] Agent stream completed. Total events: {event_count}")
+                
+                # Send final done event
+                done_event = f"event: done\ndata: {json.dumps({'chatId': chat_id})}\n\n"
+                logger.info("[CHAT STREAM] Sending done event")
+                yield done_event
+                
+            except Exception as e:
+                logger.error(f"[CHAT STREAM] Error in generator: {str(e)}")
+                import traceback
+                logger.error(f"[CHAT STREAM] Traceback:\n{traceback.format_exc()}")
+                error_event = json.dumps({"type": "error", "error": str(e)})
+                yield f"event: error\ndata: {error_event}\n\n"
+        
+        logger.info("[CHAT STREAM] Returning StreamingResponse")
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # Disable nginx buffering
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[CHAT STREAM ERROR] {str(e)}")
+        import traceback
+        logger.error(f"[CHAT STREAM ERROR] Traceback:\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Stream error: {str(e)}")
 
 @app.get("/api/history", dependencies=[Depends(verify_api_key)])
 async def get_chat_history(
@@ -728,6 +557,142 @@ async def read_document(
         logger.error(f"[DOCUMENT READ ERROR] Traceback:\n{traceback.format_exc()}")
         logger.error("=" * 80)
         raise HTTPException(status_code=500, detail=f"Error processing document: {error_msg}")
+
+
+# ============================================================================
+# INTELLIGENT DOCUMENT AGENT ENDPOINT
+# ============================================================================
+
+class AgentChatRequest(BaseModel):
+    """Request model for the intelligent agent chat endpoint."""
+    messages: List[Message]
+    pageId: Optional[str] = None  # Current page ID (optional, for context)
+    useAgent: bool = True  # Whether to use the LangGraph agent (default: True)
+
+
+class AgentChatResponse(BaseModel):
+    """Response model for the intelligent agent chat endpoint."""
+    message: Optional[str] = None
+    success: bool = True
+    chatId: Optional[str] = None
+    toolCalls: Optional[List[Dict[str, Any]]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+@app.post("/api/agent/chat", dependencies=[Depends(verify_api_key)])
+async def agent_chat(
+    request: AgentChatRequest,
+    x_workspace_id: Optional[str] = Header(None),
+    x_user_id: Optional[str] = Header(None),
+    x_page_id: Optional[str] = Header(None),
+):
+    """
+    Intelligent Document Agent Chat Endpoint
+    
+    This endpoint uses a LangGraph-based agent with full workspace awareness.
+    The agent can:
+    - List and navigate all pages in the workspace
+    - Read document content and structure
+    - Perform semantic search across documents
+    - Make targeted edits while preserving formatting
+    - Handle bulk operations like "change website name everywhere"
+    
+    The agent automatically decides which tools to use based on the user's request.
+    
+    Request headers:
+    - X-API-Key: Authentication key
+    - X-Workspace-Id: Current workspace ID
+    - X-User-Id: Current user ID
+    - X-Page-Id: Current page ID (optional)
+    
+    Request body:
+    - messages: Conversation history
+    - pageId: Current page ID (overrides header)
+    - useAgent: Whether to use LangGraph agent (default: True)
+    
+    Response:
+    - message: Agent's text response
+    - toolCalls: Write operations to execute in frontend
+    - metadata: Execution metadata (iterations, duration, etc.)
+    """
+    start_time = datetime.now()
+    chat_id = str(uuid.uuid4())
+    
+    logger.info("=" * 80)
+    logger.info("[AGENT ENDPOINT] Received agent chat request")
+    logger.info(f"[AGENT ENDPOINT] Chat ID: {chat_id}")
+    logger.info(f"[AGENT ENDPOINT] Workspace: {x_workspace_id}")
+    logger.info(f"[AGENT ENDPOINT] User: {x_user_id}")
+    logger.info(f"[AGENT ENDPOINT] Page: {request.pageId or x_page_id}")
+    logger.info(f"[AGENT ENDPOINT] Message count: {len(request.messages)}")
+    
+    try:
+        # Validate request
+        if not request.messages:
+            raise HTTPException(status_code=400, detail="Messages are required")
+        
+        last_message = request.messages[-1]
+        if last_message.role != "user":
+            raise HTTPException(status_code=400, detail="Last message must be from user")
+        
+        if not x_workspace_id:
+            raise HTTPException(status_code=400, detail="X-Workspace-Id header is required")
+        
+        if not x_user_id:
+            raise HTTPException(status_code=400, detail="X-User-Id header is required")
+        
+        # Get page ID from request or header
+        page_id = request.pageId or x_page_id
+        
+        # Build message history (excluding last message)
+        message_history = [
+            {"role": msg.role, "content": msg.content}
+            for msg in request.messages[:-1]
+        ]
+        
+        logger.info(f"[AGENT ENDPOINT] Query: {last_message.content[:100]}..." if len(last_message.content) > 100 else f"[AGENT ENDPOINT] Query: {last_message.content}")
+        
+        # Run the document agent
+        result = await run_document_agent(
+            query=last_message.content,
+            workspace_id=x_workspace_id,
+            user_id=x_user_id,
+            page_id=page_id,
+            message_history=message_history,
+        )
+        
+        duration = (datetime.now() - start_time).total_seconds()
+        
+        logger.info(f"[AGENT ENDPOINT] Agent completed in {duration:.2f}s")
+        logger.info(f"[AGENT ENDPOINT] Success: {result.get('success', False)}")
+        logger.info(f"[AGENT ENDPOINT] Tool calls: {len(result.get('toolCalls') or [])}")
+        logger.info("=" * 80)
+        
+        # Save chat history
+        all_messages = request.messages + [Message(role="assistant", content=result.get("message", ""))]
+        if x_workspace_id and x_user_id:
+            save_chat_history(chat_id, all_messages, x_workspace_id, x_user_id)
+        
+        return AgentChatResponse(
+            message=result.get("message"),
+            success=result.get("success", True),
+            chatId=chat_id,
+            toolCalls=result.get("toolCalls"),
+            metadata=result.get("metadata"),
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        duration = (datetime.now() - start_time).total_seconds()
+        logger.error("=" * 80)
+        logger.error(f"[AGENT ENDPOINT ERROR] Chat ID: {chat_id}")
+        logger.error(f"[AGENT ENDPOINT ERROR] Duration: {duration:.2f}s")
+        logger.error(f"[AGENT ENDPOINT ERROR] Error: {str(e)}")
+        import traceback
+        logger.error(f"[AGENT ENDPOINT ERROR] Traceback:\n{traceback.format_exc()}")
+        logger.error("=" * 80)
+        raise HTTPException(status_code=500, detail=f"Agent error: {str(e)}")
 
 
 # Register text transform endpoint

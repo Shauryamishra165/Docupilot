@@ -183,7 +183,12 @@ export class EmbeddingService {
         const { embeddings } = await embedMany({
             model: gemini.textEmbeddingModel(modelName),
             values: [text],
-        });
+            providerOptions: {
+                google: {
+                  outputDimensionality: 768, // optional, number of dimensions for the embedding
+                  taskType: 'SEMANTIC_SIMILARITY', // optional, specifies the task type for generating embeddings
+                },
+        }});
 
         if (!embeddings || embeddings.length === 0) {
             throw new Error('Failed to generate embedding: empty response');

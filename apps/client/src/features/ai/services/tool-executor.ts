@@ -6,6 +6,7 @@
  */
 
 import { Editor } from '@tiptap/react';
+import { markdownToHtml } from '@docmost/editor-ext';
 import {
   AiToolCall,
   InsertContentTool,
@@ -16,9 +17,38 @@ import {
   FindAndReplaceTool,
   ApplyFormattingTool,
   ClearFormattingTool,
+  InsertAfterSectionTool,
+  TableEditTool,
 } from '../types/ai-tools.types';
 
+/**
+ * Convert markdown content to HTML for proper editor rendering
+ */
+function convertMarkdownToHtml(content: string): string {
+  try {
+    // Check if content looks like markdown (has markdown syntax)
+    const hasMarkdownSyntax = /[#*_`\[\]!]/.test(content) || content.includes('\n');
+    if (hasMarkdownSyntax) {
+      const html = markdownToHtml(content);
+      return html as string;
+    }
+    return content;
+  } catch (error) {
+    console.warn('[ToolExecutor] Markdown conversion failed, using plain text:', error);
+    return content;
+  }
+}
+
 export class ToolExecutor {
+  private changeListeners: Array<(change: any) => void> = [];
+  private previewMode: boolean = false;
+  private inlineTrackingEnabled: boolean = false;
+  private pendingChanges: Array<{
+    id: string;
+    toolCall: AiToolCall;
+    applied: boolean;
+  }> = [];
+
   constructor(private editor: Editor) {
     if (!editor) {
       throw new Error('ToolExecutor requires an editor instance');
@@ -26,10 +56,380 @@ export class ToolExecutor {
   }
 
   /**
+   * Enable or disable preview mode
+   * In preview mode, changes are tracked but not applied until confirmed
+   */
+  setPreviewMode(enabled: boolean): void {
+    this.previewMode = enabled;
+  }
+
+  /**
+   * Enable or disable inline change tracking
+   * When enabled, changes are shown inline in the editor with accept/reject buttons
+   */
+  setInlineTracking(enabled: boolean): void {
+    this.inlineTrackingEnabled = enabled;
+  }
+
+  /**
+   * Check if inline tracking is enabled
+   */
+  isInlineTrackingEnabled(): boolean {
+    return this.inlineTrackingEnabled;
+  }
+
+  /**
+   * Register a listener for change notifications
+   */
+  onChangeProposed(listener: (change: any) => void): void {
+    this.changeListeners.push(listener);
+  }
+
+  /**
+   * Remove a change listener
+   */
+  removeChangeListener(listener: (change: any) => void): void {
+    this.changeListeners = this.changeListeners.filter(l => l !== listener);
+  }
+
+  /**
+   * Notify all listeners about a proposed change
+   */
+  private notifyChange(change: any): void {
+    this.changeListeners.forEach(listener => listener(change));
+  }
+
+  /**
+   * Apply a pending change by ID
+   */
+  applyChange(changeId: string): boolean {
+    const pending = this.pendingChanges.find(c => c.id === changeId);
+    if (!pending || pending.applied) {
+      return false;
+    }
+
+    const success = this.executeInternal(pending.toolCall);
+    if (success) {
+      pending.applied = true;
+    }
+    return success;
+  }
+
+  /**
+   * Reject a pending change by ID
+   */
+  rejectChange(changeId: string): void {
+    this.pendingChanges = this.pendingChanges.filter(c => c.id !== changeId);
+  }
+
+  /**
    * Execute a tool call from the AI service
    * Returns true if successful, false otherwise
    */
   execute(toolCall: AiToolCall): boolean {
+    console.log('[ToolExecutor] Executing tool call:', toolCall.tool, 
+      'previewMode:', this.previewMode, 
+      'inlineTracking:', this.inlineTrackingEnabled);
+
+    if (this.inlineTrackingEnabled) {
+      // In inline tracking mode, create inline changes in the editor
+      return this.createInlineChange(toolCall);
+    } else if (this.previewMode) {
+      // In preview mode, track the change and notify listeners (sidebar mode)
+      const changeId = `change_${Date.now()}_${Math.random()}`;
+      
+      const change = {
+        id: changeId,
+        type: this.getChangeType(toolCall),
+        description: this.getChangeDescription(toolCall),
+        toolCall: toolCall,
+        status: 'pending' as const,
+      };
+
+      this.pendingChanges.push({
+        id: changeId,
+        toolCall: toolCall,
+        applied: false,
+      });
+
+      this.notifyChange(change);
+      return true;
+    } else {
+      // In direct mode, execute immediately
+      return this.executeInternal(toolCall);
+    }
+  }
+
+  /**
+   * Create an inline change in the editor using the ChangeTrackingExtension
+   * Changes are APPLIED immediately, with accept/reject buttons for undo
+   */
+  private createInlineChange(toolCall: AiToolCall): boolean {
+    try {
+      // Special handling for tools that don't support inline tracking
+      // These execute directly without position tracking
+      if (toolCall.tool === 'table_edit') {
+        console.log('[ToolExecutor] table_edit - executing directly (no inline tracking)');
+        return this.executeInternal(toolCall);
+      }
+      
+      if (toolCall.tool === 'insert_after_section') {
+        console.log('[ToolExecutor] insert_after_section - executing directly (semantic insertion)');
+        return this.executeInternal(toolCall);
+      }
+      
+      // Find positions where the change should apply
+      const positions = this.findChangePositions(toolCall);
+      
+      if (positions.length === 0) {
+        console.warn('[ToolExecutor] No positions found for inline change');
+        // Fall back to direct execution
+        return this.executeInternal(toolCall);
+      }
+
+      console.log('[ToolExecutor] Found', positions.length, 'position(s) for inline change');
+
+      // Check if ChangeTrackingExtension is available
+      const editorCommands = this.editor.commands as any;
+      if (typeof editorCommands.applyTrackedChange !== 'function') {
+        console.warn('[ToolExecutor] ChangeTrackingExtension not available, falling back to direct execution');
+        return this.executeInternal(toolCall);
+      }
+
+      // For multiple positions, execute directly without tracking
+      // (tracking multiple positions is problematic because positions shift)
+      if (positions.length > 1) {
+        console.log('[ToolExecutor] Multiple positions detected, using direct execution for reliability');
+        return this.executeInternal(toolCall);
+      }
+
+      // Single position - use change tracking
+      const { from, to, newContent } = positions[0];
+      const changeType = this.getChangeType(toolCall);
+      
+      // Determine the type for applyTrackedChange
+      let type: 'insert' | 'delete' | 'replace' = 'replace';
+      if (changeType === 'insert') {
+        type = from === to ? 'insert' : 'replace';
+      } else if (changeType === 'delete') {
+        type = 'delete';
+      } else {
+        type = 'replace';
+      }
+      
+      // Apply the change with tracking
+      const success = editorCommands.applyTrackedChange({
+        type,
+        from,
+        to,
+        newContent,
+      });
+      
+      console.log('[ToolExecutor] Applied single tracked change:', type, 'at', from, '-', to, 'success:', success);
+
+      return success;
+    } catch (error) {
+      console.error('[ToolExecutor] Error creating inline change:', error);
+      // Fall back to direct execution
+      return this.executeInternal(toolCall);
+    }
+  }
+
+  /**
+   * Find positions in the document where the change should apply
+   */
+  private findChangePositions(toolCall: AiToolCall): Array<{ from: number; to: number; newContent: string }> {
+    const positions: Array<{ from: number; to: number; newContent: string }> = [];
+
+    if (toolCall.tool === 'find_and_replace') {
+      const params = toolCall.params as FindAndReplaceTool['params'];
+      const { searchText, replaceText, replaceAll = true, caseSensitive = false } = params;
+      
+      if (!searchText) return positions;
+
+      const { doc } = this.editor.state;
+      const regex = caseSensitive 
+        ? new RegExp(this.escapeRegex(searchText), 'g')
+        : new RegExp(this.escapeRegex(searchText), 'gi');
+
+      // Search through the document
+      doc.descendants((node, pos) => {
+        if (node.isText && node.text) {
+          let match;
+          while ((match = regex.exec(node.text)) !== null) {
+            positions.push({
+              from: pos + match.index,
+              to: pos + match.index + match[0].length,
+              newContent: replaceText || '',
+            });
+            
+            if (!replaceAll) break;
+          }
+          if (!replaceAll && positions.length > 0) return false;
+        }
+      });
+    } else if (toolCall.tool === 'insert_content') {
+      const params = toolCall.params as InsertContentTool['params'];
+      const { content, position, contentType = 'markdown' } = params;
+      
+      let insertPos = 0;
+      switch (position) {
+        case 'start':
+          insertPos = 0;
+          break;
+        case 'end':
+          insertPos = this.editor.state.doc.content.size;
+          break;
+        case 'cursor':
+        case 'after_selection':
+        default:
+          insertPos = this.editor.state.selection.to;
+          break;
+      }
+      
+      // Convert markdown to HTML if needed
+      let processedContent = content || '';
+      if (contentType === 'markdown' || contentType === 'text') {
+        processedContent = convertMarkdownToHtml(processedContent);
+      }
+      
+      positions.push({
+        from: insertPos,
+        to: insertPos,
+        newContent: processedContent,
+      });
+    } else if (toolCall.tool === 'replace_content') {
+      const params = toolCall.params as ReplaceContentTool['params'];
+      const { content, target, contentType = 'markdown' } = params;
+      
+      // Convert markdown to HTML if needed
+      let processedContent = content || '';
+      if (contentType === 'markdown' || contentType === 'text') {
+        processedContent = convertMarkdownToHtml(processedContent);
+      }
+      
+      if (target === 'selection') {
+        const { from, to } = this.editor.state.selection;
+        positions.push({ from, to, newContent: processedContent });
+      } else if (target === 'all') {
+        positions.push({
+          from: 0,
+          to: this.editor.state.doc.content.size,
+          newContent: processedContent,
+        });
+      }
+    } else if (toolCall.tool === 'delete_content') {
+      const params = toolCall.params as DeleteContentTool['params'];
+      const { target } = params;
+      
+      if (target === 'selection') {
+        const { from, to } = this.editor.state.selection;
+        positions.push({ from, to, newContent: '' });
+      }
+    } else if (toolCall.tool === 'insert_after_section') {
+      // Semantic insertion - find section and insert after it
+      const params = toolCall.params as InsertAfterSectionTool['params'];
+      const { content, sectionTitle } = params;
+      
+      if (sectionTitle && content) {
+        const { doc } = this.editor.state;
+        let insertPos = -1;
+        
+        // Find the section
+        doc.descendants((node, pos) => {
+          if (insertPos >= 0) return false;
+          
+          if (node.isBlock && node.textContent) {
+            const nodeText = node.textContent.toLowerCase().trim();
+            const searchText = sectionTitle.toLowerCase().trim();
+            
+            if (nodeText.includes(searchText) || searchText.includes(nodeText)) {
+              insertPos = pos + node.nodeSize;
+              return false;
+            }
+          }
+        });
+        
+        if (insertPos < 0) {
+          insertPos = doc.content.size;
+        }
+        
+        positions.push({
+          from: insertPos,
+          to: insertPos,
+          newContent: convertMarkdownToHtml(content),
+        });
+      }
+    }
+
+    return positions;
+  }
+
+  /**
+   * Escape special regex characters in a string
+   */
+  private escapeRegex(str: string): string {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  /**
+   * Get change type from tool call
+   */
+  private getChangeType(toolCall: AiToolCall): "insert" | "replace" | "delete" | "format" {
+    switch (toolCall.tool) {
+      case 'insert_content':
+      case 'insert_block':
+        return 'insert';
+      case 'replace_content':
+      case 'find_and_replace':
+        return 'replace';
+      case 'delete_content':
+        return 'delete';
+      case 'apply_formatting':
+      case 'clear_formatting':
+      case 'format_text':
+        return 'format';
+      default:
+        return 'replace';
+    }
+  }
+
+  /**
+   * Get human-readable description of the change
+   */
+  private getChangeDescription(toolCall: AiToolCall): string {
+    switch (toolCall.tool) {
+      case 'insert_content':
+        return `Insert content at ${(toolCall.params as any).position || 'cursor'}`;
+      case 'insert_block':
+        return `Insert ${(toolCall.params as any).blockType} block`;
+      case 'replace_content':
+        return `Replace ${(toolCall.params as any).target === 'all' ? 'entire document' : 'selection'}`;
+      case 'find_and_replace':
+        const params = toolCall.params as any;
+        return `Replace "${params.searchText}" with "${params.replaceText}"${params.replaceAll ? ' (all)' : ''}`;
+      case 'format_text':
+        return `Format text as ${(toolCall.params as any).format}`;
+      case 'apply_formatting':
+        return `Apply ${(toolCall.params as any).format} formatting`;
+      case 'clear_formatting':
+        return 'Clear formatting';
+      case 'delete_content':
+        return `Delete ${(toolCall.params as any).target}`;
+      case 'insert_after_section':
+        return `Insert after "${(toolCall.params as any).sectionTitle}"`;
+      case 'table_edit':
+        const tableParams = toolCall.params as any;
+        return `Table: ${tableParams.action}${tableParams.rows ? ` (${tableParams.rows}x${tableParams.columns})` : ''}`;
+      default:
+        return `Execute ${(toolCall as any).tool}`;
+    }
+  }
+
+  /**
+   * Internal execution (actual tool execution)
+   */
+  private executeInternal(toolCall: AiToolCall): boolean {
     try {
       switch (toolCall.tool) {
         case 'insert_content':
@@ -48,6 +448,10 @@ export class ToolExecutor {
           return this.applyFormatting(toolCall.params);
         case 'clear_formatting':
           return this.clearFormatting(toolCall.params);
+        case 'insert_after_section':
+          return this.insertAfterSection(toolCall.params);
+        case 'table_edit':
+          return this.tableEdit(toolCall.params);
         default:
           console.warn('[ToolExecutor] Unknown tool:', toolCall);
           return false;
@@ -67,9 +471,10 @@ export class ToolExecutor {
 
   /**
    * Insert content at a specified position
+   * Converts markdown to proper HTML for editor rendering
    */
   private insertContent(params: InsertContentTool['params']): boolean {
-    const { content, position = 'cursor' } = params; // Default to 'cursor' if position not provided
+    const { content, position = 'cursor', contentType = 'markdown' } = params;
 
     if (!content || content.trim().length === 0) {
       console.warn('[ToolExecutor] insertContent: Empty content provided');
@@ -77,31 +482,43 @@ export class ToolExecutor {
     }
 
     try {
+      // Convert markdown to HTML for proper editor rendering
+      let insertableContent: string | { type: string; content: any };
+      
+      if (contentType === 'markdown' || contentType === 'text') {
+        // Convert markdown to HTML
+        const html = convertMarkdownToHtml(content);
+        console.log('[ToolExecutor] Converted markdown to HTML:', html.substring(0, 100));
+        insertableContent = html;
+      } else {
+        insertableContent = content;
+      }
+
       switch (position) {
         case 'start':
           // Move cursor to start, insert content
           this.editor.commands.focus('start');
-          return this.editor.commands.insertContent(content);
+          return this.editor.commands.insertContent(insertableContent);
 
         case 'end':
           // Move cursor to end, insert content
           this.editor.commands.focus('end');
-          return this.editor.commands.insertContent(content);
+          return this.editor.commands.insertContent(insertableContent);
 
         case 'cursor':
           // Insert at current cursor position
-          return this.editor.commands.insertContent(content);
+          return this.editor.commands.insertContent(insertableContent);
 
         case 'after_selection':
           // Move to end of selection, insert content
           const { to } = this.editor.state.selection;
           this.editor.commands.setTextSelection(to);
-          return this.editor.commands.insertContent(content);
+          return this.editor.commands.insertContent(insertableContent);
 
         default:
           console.warn('[ToolExecutor] Unknown insert position:', position, '- defaulting to cursor');
           // Insert at current cursor position
-          return this.editor.commands.insertContent(content);
+          return this.editor.commands.insertContent(insertableContent);
       }
     } catch (error) {
       console.error('[ToolExecutor] Error inserting content:', error);
@@ -111,19 +528,27 @@ export class ToolExecutor {
 
   /**
    * Replace content in the document
+   * Converts markdown to proper HTML for editor rendering
    */
   private replaceContent(params: ReplaceContentTool['params']): boolean {
-    const { content, target } = params;
+    const { content, target, contentType = 'markdown' } = params;
+
+    // Convert markdown to HTML for proper editor rendering
+    let replacementContent = content;
+    if (contentType === 'markdown' || contentType === 'text') {
+      replacementContent = convertMarkdownToHtml(content);
+      console.log('[ToolExecutor] Converted markdown for replace:', replacementContent.substring(0, 100));
+    }
 
     if (target === 'all') {
-      // Replace entire document
-      return this.editor.commands.setContent(content);
+      // Replace entire document - use setContent for full replacement
+      return this.editor.commands.setContent(replacementContent);
     }
 
     if (target === 'selection') {
       // Delete selection, insert new content
       this.editor.commands.deleteSelection();
-      return this.editor.commands.insertContent(content);
+      return this.editor.commands.insertContent(replacementContent);
     }
 
     return false;
@@ -784,6 +1209,226 @@ export class ToolExecutor {
       console.error('[ToolExecutor] Error clearing formatting:', error);
       return false;
     }
+  }
+
+  /**
+   * Insert content after a specific section/heading (Semantic Insertion)
+   * Finds the section by title and inserts content after it
+   */
+  private insertAfterSection(params: InsertAfterSectionTool['params']): boolean {
+    const { content, sectionTitle, contentType = 'markdown' } = params;
+
+    if (!content || content.trim().length === 0) {
+      console.warn('[ToolExecutor] insertAfterSection: Empty content provided');
+      return false;
+    }
+
+    if (!sectionTitle || sectionTitle.trim().length === 0) {
+      console.warn('[ToolExecutor] insertAfterSection: Empty section title provided');
+      return false;
+    }
+
+    try {
+      const { doc } = this.editor.state;
+      let insertPosition = -1;
+      let sectionFound = false;
+
+      // Search for the section by title
+      doc.descendants((node, pos) => {
+        if (sectionFound) return false; // Stop if already found
+
+        // Check headings and paragraphs for matching text
+        if (node.isBlock && node.textContent) {
+          const nodeText = node.textContent.toLowerCase().trim();
+          const searchText = sectionTitle.toLowerCase().trim();
+          
+          // Check for exact or partial match
+          if (nodeText.includes(searchText) || searchText.includes(nodeText)) {
+            // Insert after this node
+            insertPosition = pos + node.nodeSize;
+            sectionFound = true;
+            console.log('[ToolExecutor] Found section at position:', pos, 'Insert at:', insertPosition);
+            return false;
+          }
+        }
+      });
+
+      if (!sectionFound || insertPosition < 0) {
+        console.warn('[ToolExecutor] insertAfterSection: Section not found:', sectionTitle);
+        // Fallback to end of document
+        insertPosition = doc.content.size;
+        console.log('[ToolExecutor] Falling back to end position:', insertPosition);
+      }
+
+      // Convert markdown to HTML
+      let insertableContent = content;
+      if (contentType === 'markdown' || contentType === 'text') {
+        insertableContent = convertMarkdownToHtml(content);
+      }
+
+      console.log('[ToolExecutor] insertAfterSection: Inserting at position', insertPosition);
+      console.log('[ToolExecutor] insertAfterSection: Content preview:', insertableContent.substring(0, 100));
+
+      // Move cursor to position and insert using chain
+      return this.editor
+        .chain()
+        .focus()
+        .setTextSelection(insertPosition)
+        .insertContent(insertableContent)
+        .run();
+    } catch (error) {
+      console.error('[ToolExecutor] Error in insertAfterSection:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Edit tables in the document
+   */
+  private tableEdit(params: TableEditTool['params']): boolean {
+    const { action, tableIndex = 0, rowIndex, columnIndex, content, rows = 3, columns = 3 } = params;
+
+    try {
+      console.log('[ToolExecutor] tableEdit:', action, { tableIndex, rowIndex, columnIndex, rows, columns });
+      
+      switch (action) {
+        case 'create_table':
+          // Create a new table with specified dimensions using chain
+          console.log('[ToolExecutor] Creating table with', rows, 'rows and', columns, 'columns');
+          return this.editor
+            .chain()
+            .focus()
+            .insertTable({ rows, cols: columns, withHeaderRow: true })
+            .run();
+
+        case 'add_row':
+          // Find and focus the table, then add row
+          if (this.focusTable(tableIndex)) {
+            return this.editor.chain().focus().addRowAfter().run();
+          }
+          console.warn('[ToolExecutor] Could not focus table for add_row');
+          return false;
+
+        case 'delete_row':
+          if (this.focusTable(tableIndex)) {
+            return this.editor.chain().focus().deleteRow().run();
+          }
+          console.warn('[ToolExecutor] Could not focus table for delete_row');
+          return false;
+
+        case 'add_column':
+          if (this.focusTable(tableIndex)) {
+            return this.editor.chain().focus().addColumnAfter().run();
+          }
+          console.warn('[ToolExecutor] Could not focus table for add_column');
+          return false;
+
+        case 'delete_column':
+          if (this.focusTable(tableIndex)) {
+            return this.editor.chain().focus().deleteColumn().run();
+          }
+          console.warn('[ToolExecutor] Could not focus table for delete_column');
+          return false;
+
+        case 'update_cell':
+          if (this.focusTableCell(tableIndex, rowIndex || 0, columnIndex || 0)) {
+            if (content) {
+              // Clear cell and insert new content
+              return this.editor.chain().focus().deleteSelection().insertContent(content).run();
+            }
+          }
+          console.warn('[ToolExecutor] Could not focus cell for update_cell');
+          return false;
+
+        default:
+          console.warn('[ToolExecutor] Unknown table action:', action);
+          return false;
+      }
+    } catch (error) {
+      console.error('[ToolExecutor] Error in tableEdit:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Focus on a specific table in the document
+   */
+  private focusTable(tableIndex: number): boolean {
+    const { doc } = this.editor.state;
+    let currentTableIndex = 0;
+    let tablePos = -1;
+
+    doc.descendants((node, pos) => {
+      if (tablePos >= 0) return false;
+      
+      if (node.type.name === 'table') {
+        if (currentTableIndex === tableIndex) {
+          tablePos = pos;
+          return false;
+        }
+        currentTableIndex++;
+      }
+    });
+
+    if (tablePos >= 0) {
+      // Focus inside the table
+      this.editor.commands.setTextSelection(tablePos + 2); // +2 to get inside first cell
+      return true;
+    }
+
+    console.warn('[ToolExecutor] Table not found at index:', tableIndex);
+    return false;
+  }
+
+  /**
+   * Focus on a specific cell in a table
+   */
+  private focusTableCell(tableIndex: number, rowIndex: number, columnIndex: number): boolean {
+    const { doc } = this.editor.state;
+    let currentTableIndex = 0;
+    let targetPos = -1;
+
+    doc.descendants((node, pos) => {
+      if (targetPos >= 0) return false;
+      
+      if (node.type.name === 'table') {
+        if (currentTableIndex === tableIndex) {
+          // Found the table, now find the cell
+          let currentRow = 0;
+          node.descendants((child, childPos) => {
+            if (targetPos >= 0) return false;
+            
+            if (child.type.name === 'tableRow') {
+              if (currentRow === rowIndex) {
+                let currentCol = 0;
+                child.descendants((cellNode, cellPos) => {
+                  if (targetPos >= 0) return false;
+                  
+                  if (cellNode.type.name === 'tableCell' || cellNode.type.name === 'tableHeader') {
+                    if (currentCol === columnIndex) {
+                      targetPos = pos + childPos + cellPos + 1;
+                      return false;
+                    }
+                    currentCol++;
+                  }
+                });
+              }
+              currentRow++;
+            }
+          });
+          return false;
+        }
+        currentTableIndex++;
+      }
+    });
+
+    if (targetPos >= 0) {
+      this.editor.commands.setTextSelection(targetPos);
+      return true;
+    }
+
+    console.warn('[ToolExecutor] Cell not found at table:', tableIndex, 'row:', rowIndex, 'col:', columnIndex);
+    return false;
   }
 }
 

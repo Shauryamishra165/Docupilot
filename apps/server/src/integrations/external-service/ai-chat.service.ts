@@ -41,6 +41,105 @@ export class AiChatService {
   }
 
   /**
+   * Stream chat message from AI service (SSE)
+   * Returns an async generator that yields SSE events
+   */
+  async* streamChatMessage(
+    request: AiChatRequestDto,
+    workspace: Workspace,
+    userId: string,
+  ): AsyncGenerator<string, void, unknown> {
+    try {
+      const url = `${this.baseUrl}/api/chat/stream`;
+
+      // Prepare headers with authentication
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'X-API-Key': this.apiKey,
+        'X-Workspace-Id': workspace.id,
+        'X-User-Id': userId,
+      };
+
+      // Add page ID to headers if provided
+      if (request.pageId) {
+        headers['X-Page-Id'] = request.pageId;
+      }
+
+      // Prepare request body
+      const requestBody: any = {
+        messages: request.messages,
+      };
+
+      // Include pageId in request body if provided
+      if (request.pageId) {
+        requestBody.pageId = request.pageId;
+      }
+
+      // Prepare request
+      const requestOptions: RequestInit = {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(this.timeout),
+      };
+
+      this.logger.log(
+        `Streaming AI chat (workspace: ${workspace.id}, user: ${userId}, messages: ${request.messages.length}, pageId: ${request.pageId || 'none'})`,
+      );
+
+      // Make the request
+      const response = await fetch(url, requestOptions);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        this.logger.error(
+          `AI service streaming error: ${response.status} - ${errorText}`,
+        );
+        throw new ServiceUnavailableException(
+          `AI service returned error: ${response.statusText}`,
+        );
+      }
+
+      // Stream the response
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) {
+        throw new ServiceUnavailableException('Response body is not readable');
+      }
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          
+          // Yield the chunk directly (already formatted as SSE)
+          yield chunk;
+        }
+      } finally {
+        reader.releaseLock();
+      }
+
+      this.logger.debug(
+        `AI chat stream completed (workspace: ${workspace.id})`,
+      );
+    } catch (error: any) {
+      if (error?.name === 'AbortError' || error?.name === 'TimeoutError') {
+        this.logger.error(`AI service stream timeout after ${this.timeout}ms`);
+        // Yield error event
+        yield `event: error\ndata: ${JSON.stringify({ error: 'Request timeout' })}\n\n`;
+      } else if (error instanceof ServiceUnavailableException) {
+        yield `event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`;
+      } else {
+        this.logger.error('AI chat stream error', error);
+        yield `event: error\ndata: ${JSON.stringify({ error: error?.message || 'Unknown error' })}\n\n`;
+      }
+    }
+  }
+
+  /**
    * Send chat message to AI service
    * Headers include workspace ID, user ID, and page ID for context
    * AI service can use tools (like read_document) to fetch content when needed
