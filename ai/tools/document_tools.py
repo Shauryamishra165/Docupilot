@@ -1054,7 +1054,7 @@ def register_document_tools(registry: ToolRegistry):
     # Table editing tool
     table_edit_tool = ToolDefinition(
         name="table_edit",
-        description="Edit tables in a document. Supports creating tables, adding/deleting rows and columns, and updating cell content. Use this when the user wants to modify tables.",
+        description="Edit tables in a document. Supports creating tables with headers and data, adding/deleting rows and columns, and updating cell content. Use this when the user wants to create or modify tables.",
         parameters={
             "type": "object",
             "properties": {
@@ -1064,27 +1064,27 @@ def register_document_tools(registry: ToolRegistry):
                     "description": "The action to perform on the table."
                 },
                 "tableIndex": {
-                    "type": "number",
+                    "type": "integer",
                     "description": "Which table in the document (0-indexed). Defaults to 0 (first table)."
                 },
                 "rowIndex": {
-                    "type": "number",
+                    "type": "integer",
                     "description": "Row index for row operations or cell updates (0-indexed)."
                 },
                 "columnIndex": {
-                    "type": "number",
+                    "type": "integer",
                     "description": "Column index for column operations or cell updates (0-indexed)."
                 },
                 "content": {
                     "type": "string",
-                    "description": "Content for update_cell action or initial content for create_table."
+                    "description": "For create_table: JSON string with headers and optional data, e.g. '{\"headers\": [\"Name\", \"Age\", \"City\"], \"data\": [[\"John\", \"25\", \"NYC\"], [\"Jane\", \"30\", \"LA\"]]}'. Can also be a comma-separated list of header names like 'Name, Age, City'. For update_cell: the text content to put in the cell."
                 },
                 "rows": {
-                    "type": "number",
-                    "description": "Number of rows for create_table action. Defaults to 3."
+                    "type": "integer",
+                    "description": "Number of rows for create_table action (including header row). Defaults to 3."
                 },
                 "columns": {
-                    "type": "number",
+                    "type": "integer",
                     "description": "Number of columns for create_table action. Defaults to 3."
                 }
             },

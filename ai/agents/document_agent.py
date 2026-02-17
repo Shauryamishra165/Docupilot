@@ -19,6 +19,7 @@ Uses the latest LangGraph patterns (2025/2026):
 import os
 import json
 import logging
+import asyncio
 from typing import Dict, Any, List, Optional, Literal, Annotated, TypedDict
 from datetime import datetime
 
@@ -28,10 +29,10 @@ from langgraph.graph.message import add_messages
 
 # LangChain imports
 from langchain_core.messages import (
-    BaseMessage, 
-    HumanMessage, 
-    AIMessage, 
-    SystemMessage, 
+    BaseMessage,
+    HumanMessage,
+    AIMessage,
+    SystemMessage,
     ToolMessage
 )
 from langchain_core.tools import tool, StructuredTool
@@ -43,6 +44,14 @@ from typing import get_type_hints, Literal
 from tools.tool_registry import tool_registry
 
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+
+MAX_ITERATIONS = 15  # Increased from 10 for complex multi-step tasks
+MODEL_NAME = "gemini-3-pro-preview"  # Using Gemini 3.0 Pro for better reasoning and tool calling
+MODEL_TEMPERATURE = 0.2  # Balanced for accuracy while allowing some creativity
 
 
 # ============================================================================
@@ -56,159 +65,137 @@ class AgentState(TypedDict):
     """
     # Messages with automatic append behavior (LangGraph standard)
     messages: Annotated[List[BaseMessage], add_messages]
-    
+
     # Context from request (set once at start)
     workspace_id: str
     user_id: str
     page_id: Optional[str]
-    
+
     # Execution tracking
     iteration: int
     tool_calls_count: int
-    
+
     # Collected write operations to return to frontend
     pending_tool_calls: List[Dict[str, Any]]
 
+    # Planner fields
+    query_analysis: Optional[Dict[str, Any]]
+    execution_plan: Optional[List[Dict[str, Any]]]
+    plan_status: Optional[str]  # "pending" | "executing" | "completed"
+
+    # @ mention support
+    mentioned_documents: List[Dict[str, Any]]  # [{pageId, title}]
+
+    # Query classification
+    query_type: Optional[str]  # "qa" | "edit" | "mixed" | "search"
+    scope: Optional[str]  # "single_doc" | "multi_doc" | "workspace"
+
 
 # ============================================================================
-# SYSTEM PROMPT
+# SYSTEM PROMPT (Simplified and focused)
 # ============================================================================
 
-SYSTEM_PROMPT = """You are an intelligent document assistant with full access to a workspace of documents in Docmost.
+SYSTEM_PROMPT = """You are an intelligent document assistant for Docmost with full workspace access.
 
-**CRITICAL: You MUST use tools to make changes. You cannot edit documents just by responding with text.**
+**CRITICAL: You MUST use tools to make changes. Text responses alone do NOT modify documents.**
 
-## Your Capabilities:
-
-1. **Workspace Awareness**: You can list all pages, understand page hierarchy, and get metadata about any document
-2. **Document Reading**: You can read the full content of any page with formatting preserved
-3. **Semantic Search**: You can find content by meaning using vector search across all documents
-4. **Document Editing**: You can edit documents while preserving formatting using various tools
-5. **Bulk Operations**: You can make the same change across multiple occurrences (like changing a website name everywhere)
-
-## Available Tools:
-
-### Reading/Understanding:
-- `list_workspace_pages` - List all pages in workspace to see what exists
-- `get_page_structure` - Get headings and sections of a page
-- `get_page_metadata` - Get page info without full content
-- `read_document` - Read full page content (use format='markdown' for editing)
-- `vector_search` - Find semantically related content across all pages
-- `search_workspace` - Search pages by title
-
-### Editing:
-- `find_and_replace` - Find and replace text (best for simple substitutions like changing names/URLs)
-- `replace_document` - Replace entire document content (for full rewrites)
-- `insert_content` - Insert new content at a position (start, end, cursor)
-- `insert_after_section` - **SEMANTIC INSERTION** - Insert content after a specific section/heading (e.g., "add content below the introduction")
-- `replace_range` - Replace content in a specific character range
-- `apply_formatting` - Apply bold, italic, etc. to text
-- `clear_formatting` - Remove formatting from text
-
-### Table Editing:
-- `table_edit` - Create, modify, and update tables. Actions: create_table, add_row, delete_row, add_column, delete_column, update_cell
-
-## Workflow for Editing Tasks:
-
-**ALWAYS USE TOOLS - DO NOT JUST RESPOND WITH TEXT WHEN ASKED TO MAKE CHANGES!**
-
-1. **First, understand the request** - What exactly needs to change?
-2. **For simple find/replace tasks** (like "change X to Y"):
-   - IMMEDIATELY use `find_and_replace` with the search and replace text
-   - You don't need to read the document first for simple substitutions
-3. **For semantic insertion** (like "add content below the introduction"):
-   - Use `insert_after_section` with the section title and content
-   - Example: insert_after_section(sectionTitle="Introduction", content="## New Section\n\nContent here...")
-4. **For table operations**:
-   - Use `table_edit` with the appropriate action
-   - Example: table_edit(action="create_table", rows=3, columns=4)
-   - Example: table_edit(action="add_row", tableIndex=0)
-   - Example: table_edit(action="update_cell", tableIndex=0, rowIndex=1, columnIndex=2, content="New value")
-5. **For complex changes**:
-   - Use `read_document` first to understand the content
-   - Then use the appropriate editing tool
-6. **For bulk changes** (like "change website name everywhere"):
-   - Use `find_and_replace` with `replaceAll=true` 
-   - This preserves all formatting while changing the text
-7. **For targeted edits**:
-   - Use `find_and_replace` for simple text changes
-   - Use `apply_formatting` to add formatting
-   - Use `insert_content` to add new content at start/end
-5. **For major rewrites**:
-   - Only use `replace_document` when the entire document needs rewriting
-
-## Important Rules:
-
-- ALWAYS read the document first before editing (unless it's a simple find/replace)
-- Use `find_and_replace` with `replaceAll=true` for bulk text changes - it's the most efficient
-- Preserve formatting by using markdown content type
-- Be specific in your responses - tell the user exactly what changes were made
-- If a change affects multiple places, report how many occurrences were changed
-- **IMPORTANT**: When the user asks a question or requests a change, you MUST use the available tools to get the information you need. Do not guess or make assumptions - use tools to read documents, search, and get context.
-
-## Responding to Edit Operations:
-
-When you use an editing tool (like `find_and_replace`, `insert_content`, `replace_document`), the tool returns a message indicating the change has been "queued for frontend execution". This is NORMAL and means the change WILL be applied!
-
-**Correct response after a successful edit operation:**
-- "I've updated [X] to [Y]. The change has been applied."
-- "Done! I replaced [X] with [Y]."
-- "I've made the requested change to your document."
-
-**Do NOT say:**
-- "I attempted to perform the action, but encountered an issue" (unless there was an actual error)
-- "There was a problem" (unless the tool actually failed)
-
-The "queued for frontend execution" message means SUCCESS, not failure!
-
-## Current Context:
+## Context
 - Workspace ID: {workspace_id}
 - User ID: {user_id}
 - Current Page ID: {page_id}
+- Mentioned Documents: {mentioned_documents}
 
-## Editor Knowledge (Tiptap/ProseMirror):
+## Execution Plan
+{execution_plan}
 
-The editor is built on Tiptap (based on ProseMirror). Documents have this structure:
+## Document Access Strategy
 
-**Block Types:**
-- `heading` (level 1-6) - Headers and subheaders. Level 1 is the main title.
-- `paragraph` - Regular text paragraphs
-- `bulletList` / `orderedList` - Lists with `listItem` children
-- `codeBlock` - Code blocks with syntax highlighting
-- `blockquote` - Quoted text
-- `table` - Tables with rows and cells
-- `image` - Embedded images
-- `callout` - Info/warning/error callouts
+**For Q&A (finding information):**
+- Vector search results are provided in context - use them directly
+- Only call read_document if you need more content than provided
 
-**Inline Formatting:**
-- **bold**, *italic*, ~~strikethrough~~, `code`
-- Links, mentions, comments
+**For Editing:**
+- Document content is pre-loaded in context
+- Apply edits using find_and_replace, insert_content, etc.
 
-**Understanding Document Structure:**
-1. Use `read_document` with `format='markdown'` to see the full content
-2. Use `get_page_structure` to see headings and sections
-3. Headings start with # (H1), ## (H2), ### (H3), etc. in markdown
-4. The FIRST H1 is typically the page title
+**For @ Mentioned Documents:**
+- These are explicitly tagged by user
+- Context for these docs is already gathered above
 
-**Making Semantic Edits:**
-1. To change a heading: Use `find_and_replace` with the heading text
-2. To insert after a section: Read the document, find the section, use `insert_content` with position
-3. To modify specific content: Use `find_and_replace` with exact text match
+## Tools Available
 
-## Tool Usage Instructions:
+**Reading:**
+- `read_document` - Read page content (use format='markdown')
+- `list_workspace_pages` - List all pages
+- `get_page_structure` - Get headings/sections
+- `vector_search` - Semantic search across documents
+- `search_workspace` - Search by title
 
-When the user asks you to:
-- **Read or understand a document**: Use `read_document` tool first
-- **Find information**: Use `vector_search` or `search_workspace` tools
-- **List pages**: Use `list_workspace_pages` tool
-- **Get page structure**: Use `get_page_structure` tool
-- **Change text everywhere**: Use `find_and_replace` with `replaceAll=true`
-- **Change a heading/title**: Use `find_and_replace` with the heading text
-- **Edit specific content**: Use appropriate editing tools
+**Editing:**
+- `find_and_replace` - Best for text substitutions (use replaceAll=true for bulk changes)
+- `insert_content` - Add content at start/end/cursor
+- `insert_after_section` - Insert after a heading (semantic insertion)
+- `replace_document` - Full document rewrite only
+- `apply_formatting` - Add bold/italic/etc
+- `table_edit` - Create/modify tables
 
-**IMPORTANT: For ANY edit request, you MUST use the appropriate tool. Just responding with text does NOT make changes!**
+## How to Handle Requests
 
-**Always use tools to get the data you need before making changes or answering questions!**"""
+1. **Simple text changes** ("change X to Y"): Use `find_and_replace` immediately
+2. **Add content after section**: Use `insert_after_section` with sectionTitle and content
+3. **Need to understand document first**: Use `read_document`, then edit
+4. **Search for information**: Use `vector_search` for semantic or `search_workspace` for titles
+5. **Create tables**: Use `table_edit` with action="create_table", rows=N, columns=M, and content as JSON: '{{"headers": ["Col1", "Col2"], "data": [["val1", "val2"]]}}'.  Always provide headers in content.
+6. **Edit existing tables**: Use `table_edit` with update_cell (rowIndex, columnIndex, content), add_row, delete_row, add_column, or delete_column
+
+## Multi-Page Edits
+- Current page: {page_id}. For other pages, use the pageId from read_document results or mentioned docs.
+- When editing a page other than the current page, always include `pageId` in your tool args.
+- The frontend will handle navigation to apply changes on other pages.
+
+## Important
+
+- Write operations return "queued for frontend execution" - this means SUCCESS
+- After successful edits, confirm to user: "Done! I've [description of change]."
+- Use tools for ALL information gathering - don't guess
+- For bulk changes, always use replaceAll=true
+
+## Response Format
+
+Start with a brief plan summary if working with multiple documents:
+**Plan:** [What you'll do]
+
+Then execute and respond concisely."""
+
+
+# ============================================================================
+# PLANNER PROMPT
+# ============================================================================
+
+PLANNER_PROMPT = """Analyze this user query for a document assistant.
+
+Query: {query}
+Current Page: {current_page}
+Mentioned Documents: {mentioned_docs}
+
+Respond in JSON:
+{{
+  "query_type": "qa" | "edit" | "mixed" | "search",
+  "scope": "single_doc" | "multi_doc" | "workspace",
+  "requires_full_read": [pageIds needing full content for editing],
+  "vector_search_queries": [semantic queries to run],
+  "target_pages": [pageIds to operate on],
+  "reasoning": "brief explanation"
+}}
+
+Rules:
+- "edit" requires full document read
+- "qa" prefers vector search (cheaper)
+- Multiple @ mentions = multi_doc
+- "all documents" or "everywhere" = workspace scope
+- If no @ mentions and single doc edit, use current page
+- If query mentions specific document titles without @, still try to identify them
+"""
 
 
 # ============================================================================
@@ -362,6 +349,294 @@ WRITE_TOOLS = {
 
 
 # ============================================================================
+# PLANNER NODE
+# ============================================================================
+
+async def planner_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Analyze query and create execution plan before LLM call.
+    Uses a lightweight LLM call for classification.
+    """
+    user_query = ""
+    for msg in reversed(state["messages"]):
+        if isinstance(msg, HumanMessage):
+            user_query = msg.content
+            break
+
+    mentioned_docs = state.get("mentioned_documents", [])
+    current_page = state.get("page_id")
+
+    logger.info("=" * 80)
+    logger.info("[PLANNER] Analyzing query...")
+    logger.info(f"[PLANNER] Query: {user_query[:100]}...")
+    logger.info(f"[PLANNER] Mentioned docs: {len(mentioned_docs)}")
+    logger.info(f"[PLANNER] Current page: {current_page}")
+
+    try:
+        # Use lightweight LLM call for classification
+        gemini_api_key = os.getenv("GEMINI_API_KEY")
+        # Use a fast model for planning
+        planner_model = os.getenv("GEMINI_PLANNER_MODEL", "gemini-2.0-flash")
+
+        llm = ChatGoogleGenerativeAI(
+            model=planner_model,
+            google_api_key=gemini_api_key,
+            temperature=0
+        )
+
+        prompt = PLANNER_PROMPT.format(
+            query=user_query,
+            current_page=current_page or "None",
+            mentioned_docs=json.dumps(mentioned_docs) if mentioned_docs else "None"
+        )
+
+        response = await asyncio.to_thread(llm.invoke, [HumanMessage(content=prompt)])
+
+        # Parse JSON response
+        response_text = response.content if isinstance(response.content, str) else str(response.content)
+
+        # Extract JSON from response (handle markdown code blocks)
+        if "```json" in response_text:
+            response_text = response_text.split("```json")[1].split("```")[0]
+        elif "```" in response_text:
+            response_text = response_text.split("```")[1].split("```")[0]
+
+        analysis = json.loads(response_text.strip())
+
+        logger.info(f"[PLANNER] Analysis result: {json.dumps(analysis, indent=2)}")
+
+        # Build execution plan
+        plan = []
+        query_type = analysis.get("query_type", "qa")
+        scope = analysis.get("scope", "single_doc")
+
+        # Step 1: Context gathering (vector search or full read)
+        if query_type == "qa":
+            # For Q&A, prefer vector search
+            target_pages = analysis.get("target_pages", [])
+            if mentioned_docs:
+                target_pages = [d.get("pageId") for d in mentioned_docs if d.get("pageId")]
+
+            plan.append({
+                "step": 1,
+                "action": "vector_search",
+                "target": target_pages if target_pages else "workspace",
+                "purpose": "Find relevant content for Q&A"
+            })
+
+        elif query_type in ["edit", "mixed"]:
+            # For editing, need full document content
+            pages_to_read = analysis.get("requires_full_read", [])
+
+            # If no specific pages identified, use mentioned docs or current page
+            if not pages_to_read:
+                if mentioned_docs:
+                    pages_to_read = [d.get("pageId") for d in mentioned_docs if d.get("pageId")]
+                elif current_page:
+                    pages_to_read = [current_page]
+
+            for page_id in pages_to_read:
+                plan.append({
+                    "step": len(plan) + 1,
+                    "action": "read_document",
+                    "target": page_id,
+                    "purpose": "Read full content for editing"
+                })
+
+        elif query_type == "search":
+            plan.append({
+                "step": 1,
+                "action": "search",
+                "target": "workspace",
+                "purpose": "Search for documents"
+            })
+
+        logger.info(f"[PLANNER] Execution plan: {json.dumps(plan, indent=2)}")
+        logger.info("=" * 80)
+
+        return {
+            "query_analysis": analysis,
+            "execution_plan": plan,
+            "plan_status": "pending",
+            "query_type": query_type,
+            "scope": scope,
+        }
+
+    except Exception as e:
+        logger.error(f"[PLANNER] Error during planning: {str(e)}")
+        import traceback
+        logger.error(f"[PLANNER] Traceback:\n{traceback.format_exc()}")
+
+        # Return default plan on error - go direct to LLM
+        return {
+            "query_analysis": {"error": str(e)},
+            "execution_plan": [],
+            "plan_status": "error",
+            "query_type": "qa",
+            "scope": "single_doc",
+        }
+
+
+def plan_router(state: AgentState) -> Literal["gather_context", "direct_llm"]:
+    """
+    Route based on plan - gather context first or go direct to LLM.
+    """
+    query_type = state.get("query_type")
+    scope = state.get("scope")
+    mentioned_docs = state.get("mentioned_documents", [])
+    plan_status = state.get("plan_status")
+
+    logger.info(f"[ROUTER] query_type={query_type}, scope={scope}, mentioned_docs={len(mentioned_docs)}, plan_status={plan_status}")
+
+    # On planning error, go direct to LLM
+    if plan_status == "error":
+        logger.info("[ROUTER] -> direct_llm (planning error)")
+        return "direct_llm"
+
+    # Multi-doc or workspace scope needs context gathering first
+    if scope in ["multi_doc", "workspace"] or len(mentioned_docs) > 1:
+        logger.info("[ROUTER] -> gather_context (multi-doc/workspace)")
+        return "gather_context"
+
+    # Q&A on single doc - use vector search in context gatherer
+    if query_type == "qa":
+        logger.info("[ROUTER] -> gather_context (Q&A)")
+        return "gather_context"
+
+    # Edit with execution plan needs context
+    execution_plan = state.get("execution_plan", [])
+    if execution_plan and query_type in ["edit", "mixed"]:
+        logger.info("[ROUTER] -> gather_context (edit with plan)")
+        return "gather_context"
+
+    # Simple single-doc edit without plan goes direct
+    logger.info("[ROUTER] -> direct_llm (simple edit)")
+    return "direct_llm"
+
+
+async def context_gatherer_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Pre-gather context using vector search instead of full reads where possible.
+    This reduces token usage significantly for Q&A queries.
+    """
+    query_type = state.get("query_type")
+    mentioned_docs = state.get("mentioned_documents", [])
+    execution_plan = state.get("execution_plan", [])
+
+    # Get user query
+    user_query = ""
+    for msg in reversed(state["messages"]):
+        if isinstance(msg, HumanMessage):
+            user_query = msg.content
+            break
+
+    context_parts = []
+
+    context = {
+        "workspaceId": state.get("workspace_id"),
+        "userId": state.get("user_id"),
+        "pageId": state.get("page_id"),
+    }
+
+    logger.info("=" * 80)
+    logger.info("[CONTEXT GATHERER] Gathering context...")
+    logger.info(f"[CONTEXT GATHERER] Query type: {query_type}")
+    logger.info(f"[CONTEXT GATHERER] Mentioned docs: {len(mentioned_docs)}")
+    logger.info(f"[CONTEXT GATHERER] Plan steps: {len(execution_plan)}")
+
+    try:
+        if query_type == "qa":
+            # Use vector search for Q&A (much cheaper than full read)
+            if mentioned_docs:
+                # Search within mentioned documents
+                for doc in mentioned_docs:
+                    page_id = doc.get("pageId")
+                    if not page_id:
+                        continue
+
+                    logger.info(f"[CONTEXT GATHERER] Vector search in doc: {doc.get('title', page_id)}")
+                    results = tool_registry.execute_tool(
+                        "vector_search",
+                        {"query": user_query, "pageId": page_id, "limit": 5},
+                        context
+                    )
+
+                    if results.get("success") and results.get("result", {}).get("results"):
+                        result_data = results.get("result", {})
+                        chunks = result_data.get("results", [])[:3]
+                        doc_content = "\n".join(r.get("content", "") for r in chunks)
+                        context_parts.append(f"From '{doc.get('title', page_id)}':\n{doc_content}")
+                        logger.info(f"[CONTEXT GATHERER] Found {len(chunks)} chunks from {doc.get('title')}")
+            else:
+                # Workspace-wide vector search
+                logger.info("[CONTEXT GATHERER] Workspace-wide vector search")
+                results = tool_registry.execute_tool(
+                    "vector_search",
+                    {"query": user_query, "limit": 10},
+                    context
+                )
+
+                if results.get("success") and results.get("result", {}).get("results"):
+                    result_data = results.get("result", {})
+                    for r in result_data.get("results", [])[:5]:
+                        page_title = r.get("pageTitle", r.get("pageId", "Unknown"))
+                        context_parts.append(f"[{page_title}]:\n{r.get('content', '')}")
+                    logger.info(f"[CONTEXT GATHERER] Found {len(result_data.get('results', []))} workspace results")
+
+        elif query_type in ["edit", "mixed"]:
+            # For editing, we need full content of target pages
+            target_pages = mentioned_docs if mentioned_docs else []
+
+            # Also check execution plan for pages to read
+            for step in execution_plan:
+                if step.get("action") == "read_document":
+                    target_id = step.get("target")
+                    if target_id and not any(d.get("pageId") == target_id for d in target_pages):
+                        target_pages.append({"pageId": target_id})
+
+            # If still no target pages, use current page
+            if not target_pages and state.get("page_id"):
+                target_pages = [{"pageId": state.get("page_id")}]
+
+            for doc in target_pages:
+                page_id = doc.get("pageId")
+                if not page_id:
+                    continue
+
+                logger.info(f"[CONTEXT GATHERER] Reading full doc: {doc.get('title', page_id)}")
+                content = tool_registry.execute_tool(
+                    "read_document",
+                    {"pageId": page_id, "format": "markdown"},
+                    context
+                )
+
+                if content.get("success") and content.get("result", {}).get("content"):
+                    result_data = content.get("result", {})
+                    title = doc.get("title") or result_data.get("title", page_id)
+                    context_parts.append(f"=== {title} (ID: {page_id}) ===\n{result_data.get('content', '')}")
+                    logger.info(f"[CONTEXT GATHERER] Read {len(result_data.get('content', ''))} chars from {title}")
+
+        # Inject gathered context as a system message
+        if context_parts:
+            context_message = SystemMessage(
+                content=f"## Gathered Context\n\n" + "\n\n---\n\n".join(context_parts)
+            )
+            logger.info(f"[CONTEXT GATHERER] Injecting context message with {len(context_parts)} parts")
+            logger.info("=" * 80)
+            return {"messages": [context_message], "plan_status": "executing"}
+
+        logger.info("[CONTEXT GATHERER] No context gathered")
+        logger.info("=" * 80)
+        return {"plan_status": "executing"}
+
+    except Exception as e:
+        logger.error(f"[CONTEXT GATHERER] Error: {str(e)}")
+        import traceback
+        logger.error(f"[CONTEXT GATHERER] Traceback:\n{traceback.format_exc()}")
+        return {"plan_status": "executing"}
+
+
+# ============================================================================
 # LLM INITIALIZATION
 # ============================================================================
 
@@ -373,14 +648,18 @@ def get_llm_with_tools():
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     if not gemini_api_key:
         raise ValueError("GEMINI_API_KEY environment variable is required")
-    
-    logger.info("[AGENT] Initializing Gemini LLM with tools")
-    
-    # Initialize the model (use gemini-2.0-flash for best tool calling)
+
+    # Allow model override via environment variable
+    model_name = os.getenv("GEMINI_MODEL", MODEL_NAME)
+    temperature = float(os.getenv("GEMINI_TEMPERATURE", MODEL_TEMPERATURE))
+
+    logger.info(f"[AGENT] Initializing Gemini LLM: model={model_name}, temperature={temperature}")
+
+    # Initialize the model
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model=model_name,
         google_api_key=gemini_api_key,
-        temperature=0.1,
+        temperature=temperature,
     )
     
     # Ensure tools are initialized
@@ -439,10 +718,31 @@ def llm_call(state: AgentState) -> Dict[str, Any]:
     logger.info(f"[AGENT LLM] Message count: {len(state['messages'])}")
     
     # Build system message with context
+    mentioned_docs = state.get("mentioned_documents", [])
+    execution_plan = state.get("execution_plan", [])
+
+    # Format mentioned documents for prompt
+    mentioned_docs_str = "None"
+    if mentioned_docs:
+        mentioned_docs_str = ", ".join(
+            f"'{d.get('title', d.get('pageId', 'Unknown'))}' (ID: {d.get('pageId', 'unknown')})"
+            for d in mentioned_docs
+        )
+
+    # Format execution plan for prompt
+    plan_str = "None"
+    if execution_plan:
+        plan_parts = []
+        for step in execution_plan:
+            plan_parts.append(f"- Step {step.get('step', '?')}: {step.get('action', 'unknown')} on {step.get('target', 'unknown')} ({step.get('purpose', '')})")
+        plan_str = "\n".join(plan_parts)
+
     system_content = SYSTEM_PROMPT.format(
         workspace_id=state.get("workspace_id", "unknown"),
         user_id=state.get("user_id", "unknown"),
         page_id=state.get("page_id", "not specified"),
+        mentioned_documents=mentioned_docs_str,
+        execution_plan=plan_str,
     )
     
     # Prepare messages for the LLM
@@ -603,8 +903,24 @@ def tool_node(state: AgentState) -> Dict[str, Any]:
         if is_write_operation:
             # For write operations, collect for frontend execution
             logger.info(f"[AGENT TOOLS] Write operation: {tool_name} -> queuing for frontend")
-            
+
+            # Determine target page for this write operation
+            target_page_id = tool_args.get("pageId") or context.get("pageId")
+
+            # Build page info for frontend navigation
+            page_info = {"pageId": target_page_id} if target_page_id else {}
+            mentioned_docs = state.get("mentioned_documents", [])
+            for doc in mentioned_docs:
+                if doc.get("pageId") == target_page_id:
+                    page_info["title"] = doc.get("title", "")
+                    break
+
             frontend_tool_call = {"tool": tool_name, "params": tool_args}
+
+            # Tag with pageId and pageInfo for multi-page editing
+            if target_page_id:
+                frontend_tool_call["pageId"] = target_page_id
+                frontend_tool_call["pageInfo"] = page_info
             
             # Map tool names/params for frontend compatibility
             if tool_name == "replace_document":
@@ -654,11 +970,23 @@ def tool_node(state: AgentState) -> Dict[str, Any]:
                 }
             
             pending_tool_calls.append(frontend_tool_call)
-            
+
+            # Provide clear success feedback that helps the LLM understand the operation worked
+            action_descriptions = {
+                "find_and_replace": f"Successfully replaced '{tool_args.get('searchText', '')}' with '{tool_args.get('replaceText', '')}'",
+                "replace_document": "Successfully replaced entire document content",
+                "insert_content": f"Successfully inserted content at {tool_args.get('position', 'end')}",
+                "insert_after_section": f"Successfully inserted content after section '{tool_args.get('sectionTitle', '')}'",
+                "apply_formatting": f"Successfully applied {tool_args.get('format', '')} formatting",
+                "clear_formatting": "Successfully cleared formatting",
+                "table_edit": f"Successfully executed table action: {tool_args.get('action', '')}",
+            }
+            success_message = action_descriptions.get(tool_name, f"{tool_name} completed successfully")
+
             tool_result = {
                 "success": True,
-                "message": f"{tool_name} operation queued for frontend execution",
-                "willExecuteOnFrontend": True
+                "message": success_message,
+                "applied": True  # Explicitly indicate the change was applied
             }
         else:
             # For read operations, execute via tool registry
@@ -732,16 +1060,16 @@ def should_continue(state: AgentState) -> Literal["tools", "__end__"]:
     Follows the latest LangGraph pattern.
     """
     messages = state["messages"]
-    
+
     if not messages:
         return END
-    
+
     last_message = messages[-1]
     iteration = state.get("iteration", 0)
-    
-    # Prevent infinite loops
-    if iteration >= 10:
-        logger.warning(f"[AGENT ROUTER] Max iterations ({iteration}), stopping")
+
+    # Prevent infinite loops - use configurable max iterations
+    if iteration >= MAX_ITERATIONS:
+        logger.warning(f"[AGENT ROUTER] Max iterations reached ({iteration}/{MAX_ITERATIONS}), stopping to prevent infinite loop")
         return END
     
     # Check for tool calls in different formats
@@ -772,37 +1100,56 @@ def create_document_agent():
     """
     Build and compile the document agent graph.
     Uses the latest LangGraph StateGraph pattern.
-    
-    Graph structure:
-        START -> llm_call -> [tool_node -> llm_call]* -> END
+
+    Graph structure (with planner):
+        START -> planner -> [gather_context OR direct_llm] -> llm_call -> [tool_node -> llm_call]* -> END
     """
-    logger.info("[AGENT] Building document agent graph")
-    
+    logger.info("[AGENT] Building document agent graph with planner")
+
     # Ensure tools are initialized
     initialize_tools()
-    
+
     # Create graph with our state type
     graph = StateGraph(AgentState)
-    
+
     # Add nodes
+    graph.add_node("planner", planner_node)
+    graph.add_node("context_gatherer", context_gatherer_node)
     graph.add_node("llm_call", llm_call)
     graph.add_node("tools", tool_node)
-    
-    # Add edges (following latest LangGraph pattern)
-    graph.add_edge(START, "llm_call")
+
+    # Add edges (with planner flow)
+    graph.add_edge(START, "planner")
+
+    # After planner, route to context gathering or direct to LLM
+    graph.add_conditional_edges(
+        "planner",
+        plan_router,
+        {
+            "gather_context": "context_gatherer",
+            "direct_llm": "llm_call",
+        }
+    )
+
+    # After context gathering, go to LLM
+    graph.add_edge("context_gatherer", "llm_call")
+
+    # LLM decision: tools or end
     graph.add_conditional_edges(
         "llm_call",
         should_continue,
         {"tools": "tools", END: END}
     )
+
+    # After tools, back to LLM
     graph.add_edge("tools", "llm_call")
-    
+
     # Compile
     agent = graph.compile()
-    
-    logger.info("[AGENT] Document agent graph compiled")
+
+    logger.info("[AGENT] Document agent graph with planner compiled")
     logger.info(f"[AGENT] Available tools: {len(ALL_TOOLS)}")
-    
+
     return agent
 
 
@@ -833,32 +1180,42 @@ class DocumentAgent:
         user_id: str,
         page_id: Optional[str] = None,
         message_history: Optional[List[Dict[str, str]]] = None,
+        mentioned_documents: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Run the agent with a user query (non-streaming version).
+
+        Args:
+            query: User's query
+            workspace_id: Current workspace ID
+            user_id: Current user ID
+            page_id: Current page ID (optional)
+            message_history: Previous messages in conversation
+            mentioned_documents: List of @ mentioned documents [{pageId, title}]
         """
         start_time = datetime.now()
-        
+
         logger.info("=" * 80)
         logger.info("[DocumentAgent] Starting run")
         logger.info(f"[DocumentAgent] Query: {query[:100]}...")
         logger.info(f"[DocumentAgent] Workspace: {workspace_id}, Page: {page_id}")
-        
+        logger.info(f"[DocumentAgent] Mentioned docs: {len(mentioned_documents or [])}")
+
         self._ensure_initialized()
-        
+
         # Build messages
         messages: List[BaseMessage] = []
-        
+
         if message_history:
             for msg in message_history:
                 if msg.get("role") == "user":
                     messages.append(HumanMessage(content=msg.get("content", "")))
                 elif msg.get("role") == "assistant":
                     messages.append(AIMessage(content=msg.get("content", "")))
-        
+
         messages.append(HumanMessage(content=query))
-        
-        # Initial state
+
+        # Initial state with planner fields
         initial_state: AgentState = {
             "messages": messages,
             "workspace_id": workspace_id,
@@ -867,12 +1224,19 @@ class DocumentAgent:
             "iteration": 0,
             "tool_calls_count": 0,
             "pending_tool_calls": [],
+            # Planner fields
+            "query_analysis": None,
+            "execution_plan": None,
+            "plan_status": None,
+            "mentioned_documents": mentioned_documents or [],
+            "query_type": None,
+            "scope": None,
         }
         
         try:
-            # Run the agent (sync invoke)
-            result = self._agent.invoke(initial_state)
-            
+            # Run the agent asynchronously for proper async handling
+            result = await asyncio.to_thread(self._agent.invoke, initial_state)
+
             duration = (datetime.now() - start_time).total_seconds()
             
             # Extract final response
@@ -934,33 +1298,43 @@ class DocumentAgent:
         user_id: str,
         page_id: Optional[str] = None,
         message_history: Optional[List[Dict[str, str]]] = None,
+        mentioned_documents: Optional[List[Dict[str, Any]]] = None,
     ):
         """
         Run the agent with streaming output.
         Yields events as they occur (tool calls, LLM responses, etc.)
+
+        Args:
+            query: User's query
+            workspace_id: Current workspace ID
+            user_id: Current user ID
+            page_id: Current page ID (optional)
+            message_history: Previous messages in conversation
+            mentioned_documents: List of @ mentioned documents [{pageId, title}]
         """
         start_time = datetime.now()
-        
+
         logger.info("=" * 80)
         logger.info("[DocumentAgent STREAM] Starting streaming run")
         logger.info(f"[DocumentAgent STREAM] Query: {query[:100]}...")
         logger.info(f"[DocumentAgent STREAM] Workspace: {workspace_id}, Page: {page_id}")
-        
+        logger.info(f"[DocumentAgent STREAM] Mentioned docs: {len(mentioned_documents or [])}")
+
         self._ensure_initialized()
-        
+
         # Build messages
         messages: List[BaseMessage] = []
-        
+
         if message_history:
             for msg in message_history:
                 if msg.get("role") == "user":
                     messages.append(HumanMessage(content=msg.get("content", "")))
                 elif msg.get("role") == "assistant":
                     messages.append(AIMessage(content=msg.get("content", "")))
-        
+
         messages.append(HumanMessage(content=query))
-        
-        # Initial state
+
+        # Initial state with planner fields
         initial_state: AgentState = {
             "messages": messages,
             "workspace_id": workspace_id,
@@ -969,19 +1343,50 @@ class DocumentAgent:
             "iteration": 0,
             "tool_calls_count": 0,
             "pending_tool_calls": [],
+            # Planner fields
+            "query_analysis": None,
+            "execution_plan": None,
+            "plan_status": None,
+            "mentioned_documents": mentioned_documents or [],
+            "query_type": None,
+            "scope": None,
         }
         
         try:
             # Stream the agent execution with updates mode
             logger.info("[DocumentAgent STREAM] Starting astream...")
+            sent_tool_count = 0  # Track how many pending tools we've already sent
             async for chunk in self._agent.astream(initial_state, stream_mode="updates"):
                 logger.info(f"[DocumentAgent STREAM] Chunk keys: {list(chunk.keys())}")
                 
                 # Process different types of chunks (updates mode returns node_name: updates)
                 for node_name, node_output in chunk.items():
                     logger.info(f"[DocumentAgent STREAM] Node: {node_name}")
-                    
-                    if node_name == "llm_call":
+
+                    if node_name == "planner":
+                        # Planner node - send plan info
+                        execution_plan = node_output.get("execution_plan", [])
+                        query_type = node_output.get("query_type")
+                        scope = node_output.get("scope")
+
+                        if execution_plan:
+                            logger.info(f"[DocumentAgent STREAM] Plan: {len(execution_plan)} steps")
+                            yield {
+                                "type": "plan",
+                                "plan": execution_plan,
+                                "query_type": query_type,
+                                "scope": scope,
+                            }
+
+                    elif node_name == "context_gatherer":
+                        # Context gatherer - send context gathering status
+                        logger.info("[DocumentAgent STREAM] Context gathered")
+                        yield {
+                            "type": "context_gathered",
+                            "status": "complete"
+                        }
+
+                    elif node_name == "llm_call":
                         # LLM response - extract the message
                         messages_list = node_output.get("messages", [])
                         logger.info(f"[DocumentAgent STREAM] LLM messages: {len(messages_list)}")
@@ -1071,14 +1476,17 @@ class DocumentAgent:
                                     "content": msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
                                 }
                         
-                        # Send pending tool calls for frontend execution
-                        if pending_tools:
-                            logger.info(f"[DocumentAgent STREAM] Yielding pending_tools: {len(pending_tools)}")
-                            for tool in pending_tools:
+                        # Send only NEW pending tool calls (not already-sent ones)
+                        # pending_tool_calls accumulates across iterations, so slice off new ones
+                        if pending_tools and len(pending_tools) > sent_tool_count:
+                            new_tools = pending_tools[sent_tool_count:]
+                            sent_tool_count = len(pending_tools)
+                            logger.info(f"[DocumentAgent STREAM] Yielding {len(new_tools)} NEW pending_tools (total accumulated: {len(pending_tools)})")
+                            for tool in new_tools:
                                 logger.info(f"[DocumentAgent STREAM] Pending tool: {tool.get('tool', 'unknown')}")
                             yield {
                                 "type": "pending_tools",
-                                "tools": pending_tools
+                                "tools": new_tools
                             }
             
             duration = (datetime.now() - start_time).total_seconds()
@@ -1128,9 +1536,18 @@ async def run_document_agent(
     user_id: str,
     page_id: Optional[str] = None,
     message_history: Optional[List[Dict[str, str]]] = None,
+    mentioned_documents: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Convenience function to run the document agent.
+
+    Args:
+        query: User's query
+        workspace_id: Current workspace ID
+        user_id: Current user ID
+        page_id: Current page ID (optional)
+        message_history: Previous messages in conversation
+        mentioned_documents: List of @ mentioned documents [{pageId, title}]
     """
     agent = get_document_agent()
     return await agent.run(
@@ -1139,4 +1556,5 @@ async def run_document_agent(
         user_id=user_id,
         page_id=page_id,
         message_history=message_history,
+        mentioned_documents=mentioned_documents,
     )
