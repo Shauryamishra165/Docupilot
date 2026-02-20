@@ -119,6 +119,22 @@ export interface TableEditTool {
 }
 
 /**
+ * A tool call tagged with the target page for multi-page editing.
+ * When pageId is absent or matches the current page, the tool executes immediately.
+ * When pageId targets a different page, it's queued for "Review Next File" navigation.
+ */
+export interface PageTaggedToolCall {
+  tool: string;
+  params: Record<string, any>;
+  pageId?: string;
+  pageInfo?: {
+    title?: string;
+    slugId?: string;
+    spaceSlug?: string;
+  };
+}
+
+/**
  * Response from AI service that includes tool calls
  */
 export interface AiChatResponse {

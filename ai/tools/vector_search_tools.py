@@ -22,6 +22,11 @@ CLOUD_AI_API_KEY = os.getenv("EXTERNAL_SERVICE_API_KEY", "parth128")
 # Timeout for Cloud AI API requests (in seconds)
 CLOUD_AI_API_TIMEOUT = float(os.getenv("CLOUD_AI_API_TIMEOUT", "30.0"))  # 30 seconds default
 
+# Default search parameters - more permissive defaults for better results
+DEFAULT_THRESHOLD = 0.5  # Lowered from 0.7 - allows more relevant results
+FALLBACK_THRESHOLD = 0.3  # Even lower threshold for retry when no results found
+DEFAULT_LIMIT = 10
+
 
 def vector_search_handler(arguments: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -79,20 +84,21 @@ def vector_search_handler(arguments: Dict[str, Any], context: Dict[str, Any]) ->
     # Get pageId from arguments or context (prefer arguments if provided)
     page_id = arguments.get("pageId") or context_page_id
     
-    # Get optional parameters
-    limit = arguments.get("limit", 10)
-    threshold = arguments.get("threshold", 0.7)
-    
+    # Get optional parameters with improved defaults
+    limit = arguments.get("limit", DEFAULT_LIMIT)
+    threshold = arguments.get("threshold", DEFAULT_THRESHOLD)
+    user_specified_threshold = "threshold" in arguments  # Track if user explicitly set threshold
+
     # Validate limit
     if not isinstance(limit, (int, float)) or limit < 1 or limit > 100:
-        logger.warning(f"[TOOL: vector_search] Invalid limit {limit}, using default 10")
-        limit = 10
+        logger.warning(f"[TOOL: vector_search] Invalid limit {limit}, using default {DEFAULT_LIMIT}")
+        limit = DEFAULT_LIMIT
     limit = int(limit)
-    
+
     # Validate threshold
     if not isinstance(threshold, (int, float)) or threshold < 0 or threshold > 1:
-        logger.warning(f"[TOOL: vector_search] Invalid threshold {threshold}, using default 0.7")
-        threshold = 0.7
+        logger.warning(f"[TOOL: vector_search] Invalid threshold {threshold}, using default {DEFAULT_THRESHOLD}")
+        threshold = DEFAULT_THRESHOLD
     threshold = float(threshold)
     
     logger.info(f"[TOOL: vector_search] Query: '{query}'")
@@ -156,9 +162,21 @@ def vector_search_handler(arguments: Dict[str, Any], context: Dict[str, Any]) ->
             # Extract results
             results = response_data.get("results", [])
             count = response_data.get("count", len(results))
-            
-            logger.info(f"[TOOL: vector_search] Found {count} results")
-            
+
+            logger.info(f"[TOOL: vector_search] Found {count} results with threshold {threshold}")
+
+            # Fallback: If no results and user didn't specify threshold, retry with lower threshold
+            if count == 0 and not user_specified_threshold and threshold > FALLBACK_THRESHOLD:
+                logger.info(f"[TOOL: vector_search] No results found, retrying with lower threshold {FALLBACK_THRESHOLD}")
+                payload["threshold"] = FALLBACK_THRESHOLD
+                retry_response = client.post(url, json=payload, headers=headers)
+                retry_response.raise_for_status()
+                retry_data = retry_response.json()
+                results = retry_data.get("results", [])
+                count = retry_data.get("count", len(results))
+                threshold = FALLBACK_THRESHOLD  # Update for response
+                logger.info(f"[TOOL: vector_search] Retry found {count} results with threshold {FALLBACK_THRESHOLD}")
+
             # Format results for AI consumption
             formatted_results = []
             for result in results:
@@ -169,17 +187,30 @@ def vector_search_handler(arguments: Dict[str, Any], context: Dict[str, Any]) ->
                     "distance": result.get("distance"),
                     "relevance": 1.0 - result.get("distance", 1.0),  # Convert distance to relevance score
                 }
-                
+
                 # Include metadata if available
                 if result.get("metadata"):
                     formatted_result["metadata"] = result.get("metadata")
-                
+
                 formatted_results.append(formatted_result)
-            
+
             total_duration = (datetime.now() - start_time).total_seconds()
             logger.info(f"[TOOL: vector_search] Operation completed in {total_duration:.2f}s")
             logger.info("-" * 80)
-            
+
+            # Provide helpful message if still no results
+            if count == 0:
+                return {
+                    "success": True,
+                    "query": query,
+                    "pageId": page_id,
+                    "results": [],
+                    "count": 0,
+                    "limit": limit,
+                    "threshold": threshold,
+                    "message": "No results found. Try rephrasing your query or searching without a pageId to search the entire workspace."
+                }
+
             return {
                 "success": True,
                 "query": query,
@@ -228,7 +259,7 @@ def register_vector_search_tools(registry: ToolRegistry):
                 },
                 "threshold": {
                     "type": "number",
-                    "description": "Similarity threshold (0-1). Lower values mean stricter matching (fewer results). Defaults to 0.7 if not specified. 0.0 = only exact matches, 1.0 = all content. Recommended: 0.6-0.8 for balanced results.",
+                    "description": "Similarity threshold (0-1). Lower values mean stricter matching (fewer results). Defaults to 0.5 for balanced results. Will automatically retry with 0.3 if no results found. Recommended: 0.3-0.6 for most searches.",
                     "minimum": 0,
                     "maximum": 1
                 },

@@ -89,7 +89,15 @@ export const ChangeTrackingExtension = Extension.create<{}, ChangeTrackingStorag
       }) => ({ editor, tr }) => {
         const { type, from, to, newContent } = changeData;
         const doc = editor.state.doc;
-        
+
+        console.log('[ChangeTracking] Applying change:', {
+          type,
+          from,
+          to,
+          contentLength: newContent?.length || 0,
+          contentPreview: newContent?.substring(0, 100) || '',
+        });
+
         // Save original content for potential undo
         let originalContent = '';
         if (type === 'delete' || type === 'replace') {
@@ -99,10 +107,10 @@ export const ChangeTrackingExtension = Extension.create<{}, ChangeTrackingStorag
             console.warn('[ChangeTracking] Could not get original content:', e);
           }
         }
-        
+
         // Generate change ID
         const changeId = `change_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        
+
         // Create the change record BEFORE applying
         const change: Change = {
           id: changeId,
@@ -114,36 +122,61 @@ export const ChangeTrackingExtension = Extension.create<{}, ChangeTrackingStorag
           timestamp: Date.now(),
           status: 'pending',
         };
-        
+
         // APPLY the change to the document using a SINGLE chain to avoid duplicates
         try {
-          const chain = editor.chain().focus();
-          
+          let success = false;
+
           switch (type) {
             case 'insert':
               if (newContent) {
-                chain.setTextSelection(from).insertContent(newContent);
-                const success = chain.run();
+                // Use chain with focus to ensure editor is ready
+                // insertContent handles both HTML and plain text
+                success = editor
+                  .chain()
+                  .focus()
+                  .setTextSelection(from)
+                  .insertContent(newContent, {
+                    parseOptions: {
+                      preserveWhitespace: 'full',
+                    },
+                  })
+                  .run();
+
                 if (success) {
-                  // Update 'to' to reflect the new content
+                  // Update 'to' to reflect the new content position
                   change.to = editor.state.selection.to;
                 }
               }
               break;
-              
+
             case 'delete': {
-              chain.setTextSelection({ from, to }).deleteSelection();
-              chain.run();
+              success = editor
+                .chain()
+                .focus()
+                .setTextSelection({ from, to })
+                .deleteSelection()
+                .run();
               // For delete, to becomes same as from after deletion
               change.to = from;
               break;
             }
-              
+
             case 'replace':
               if (newContent) {
                 // Select the range, delete, then insert new content
-                chain.setTextSelection({ from, to }).deleteSelection().insertContent(newContent);
-                const success = chain.run();
+                success = editor
+                  .chain()
+                  .focus()
+                  .setTextSelection({ from, to })
+                  .deleteSelection()
+                  .insertContent(newContent, {
+                    parseOptions: {
+                      preserveWhitespace: 'full',
+                    },
+                  })
+                  .run();
+
                 if (success) {
                   // Update 'to' to reflect new content
                   change.to = editor.state.selection.to;
@@ -151,12 +184,16 @@ export const ChangeTrackingExtension = Extension.create<{}, ChangeTrackingStorag
               }
               break;
           }
-          
-          // Store the change AFTER applying
-          editor.storage.changeTracking.changes.push(change);
-          
-          console.log('[ChangeTracking] Applied and tracked change:', change.id, type, 'from', from, 'to', change.to);
-          return true;
+
+          // Only store the change if it was successfully applied
+          if (success) {
+            editor.storage.changeTracking.changes.push(change);
+            console.log('[ChangeTracking] Applied and tracked change:', change.id, type, 'from', from, 'to', change.to);
+          } else {
+            console.warn('[ChangeTracking] Change application returned false for:', type);
+          }
+
+          return success;
         } catch (error) {
           console.error('[ChangeTracking] Error applying change:', error);
           return false;
@@ -339,68 +376,115 @@ export const ChangeTrackingExtension = Extension.create<{}, ChangeTrackingStorag
         state: {
           init: () => DecorationSet.empty,
           apply: (_tr, _decorationSet, _oldState, newState) => {
-            const changes = (extension.storage?.changes || []).filter((c: Change) => c.status === 'pending');
+            const allChanges = extension.storage?.changes || [];
+            const changes = allChanges.filter((c: Change) => c.status === 'pending');
+
+            // Log for debugging
+            if (allChanges.length > 0) {
+              console.log('[ChangeTracking] Decoration update:', {
+                totalChanges: allChanges.length,
+                pendingChanges: changes.length,
+                docSize: newState.doc.content.size,
+              });
+            }
 
             if (changes.length === 0) {
               return DecorationSet.empty;
             }
 
             const decorations: Decoration[] = [];
+            const docSize = newState.doc.content.size;
 
-            changes.forEach((change: Change) => {
-              const docSize = newState.doc.content.size;
-              const safeFrom = Math.max(0, Math.min(change.from, docSize));
+            changes.forEach((change: Change, index: number) => {
+              // Validate positions
+              const safeFrom = Math.max(0, Math.min(change.from, docSize - 1));
               const safeTo = Math.max(safeFrom, Math.min(change.to, docSize));
-              
-              if (safeFrom >= docSize) return;
+
+              console.log('[ChangeTracking] Creating decoration for change:', {
+                id: change.id,
+                type: change.type,
+                from: change.from,
+                to: change.to,
+                safeFrom,
+                safeTo,
+                docSize,
+              });
+
+              // Skip if positions are invalid
+              if (safeFrom >= docSize || safeTo <= 0) {
+                console.warn('[ChangeTracking] Invalid positions for change:', change.id);
+                return;
+              }
 
               // Create decoration to highlight the changed content
               if (change.type === 'insert' || change.type === 'replace') {
                 // Highlight the new content (green for insert, yellow for replace)
                 const className = change.type === 'insert' ? 'ai-change-insert' : 'ai-change-replace';
-                
+
+                // Only create inline decoration if there's a valid range
                 if (safeTo > safeFrom) {
-                  decorations.push(
-                    Decoration.inline(safeFrom, safeTo, {
-                      class: className,
-                      'data-change-id': change.id,
-                    })
-                  );
+                  try {
+                    decorations.push(
+                      Decoration.inline(safeFrom, safeTo, {
+                        class: className,
+                        'data-change-id': change.id,
+                        'data-new': 'true', // For animation
+                      })
+                    );
+                  } catch (e) {
+                    console.warn('[ChangeTracking] Failed to create inline decoration:', e);
+                  }
                 }
-                
+
                 // Add accept/reject buttons at the end
-                decorations.push(
-                  Decoration.widget(safeTo, () => {
-                    const buttons = document.createElement('span');
-                    buttons.className = 'ai-change-buttons';
-                    buttons.innerHTML = `
-                      <button class="ai-change-accept" data-change-id="${change.id}" title="Accept change">✓</button>
-                      <button class="ai-change-reject" data-change-id="${change.id}" title="Reject (undo)">✗</button>
-                    `;
-                    return buttons;
-                  }, { side: 1 })
-                );
+                try {
+                  decorations.push(
+                    Decoration.widget(Math.min(safeTo, docSize - 1), () => {
+                      const buttons = document.createElement('span');
+                      buttons.className = 'ai-change-buttons';
+                      buttons.setAttribute('data-change-id', change.id);
+                      buttons.innerHTML = `
+                        <button class="ai-change-accept" data-change-id="${change.id}" title="Accept change">✓</button>
+                        <button class="ai-change-reject" data-change-id="${change.id}" title="Reject (undo)">✗</button>
+                      `;
+                      return buttons;
+                    }, { side: 1 })
+                  );
+                } catch (e) {
+                  console.warn('[ChangeTracking] Failed to create widget decoration:', e);
+                }
               } else if (change.type === 'delete') {
                 // For deletions that were applied, we can't highlight (content is gone)
                 // Show a widget indicating something was deleted
-                decorations.push(
-                  Decoration.widget(safeFrom, () => {
-                    const span = document.createElement('span');
-                    span.className = 'ai-change-delete-marker';
-                    span.innerHTML = `
-                      <span class="ai-change-deleted-text" title="Deleted: ${change.originalContent}">[deleted]</span>
-                      <span class="ai-change-buttons">
-                        <button class="ai-change-accept" data-change-id="${change.id}" title="Accept deletion">✓</button>
-                        <button class="ai-change-reject" data-change-id="${change.id}" title="Restore deleted text">✗</button>
-                      </span>
-                    `;
-                    return span;
-                  }, { side: 1 })
-                );
+                try {
+                  decorations.push(
+                    Decoration.widget(safeFrom, () => {
+                      const span = document.createElement('span');
+                      span.className = 'ai-change-delete-marker';
+                      span.innerHTML = `
+                        <span class="ai-change-deleted-text" title="Deleted: ${change.originalContent}">[deleted]</span>
+                        <span class="ai-change-buttons">
+                          <button class="ai-change-accept" data-change-id="${change.id}" title="Accept deletion">✓</button>
+                          <button class="ai-change-reject" data-change-id="${change.id}" title="Restore deleted text">✗</button>
+                        </span>
+                      `;
+                      return span;
+                    }, { side: 1 })
+                  );
+                } catch (e) {
+                  console.warn('[ChangeTracking] Failed to create delete marker:', e);
+                }
               }
             });
 
-            return DecorationSet.create(newState.doc, decorations);
+            console.log('[ChangeTracking] Created', decorations.length, 'decorations');
+
+            try {
+              return DecorationSet.create(newState.doc, decorations);
+            } catch (e) {
+              console.error('[ChangeTracking] Failed to create decoration set:', e);
+              return DecorationSet.empty;
+            }
           },
         },
 

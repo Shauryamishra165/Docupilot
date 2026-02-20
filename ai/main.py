@@ -48,6 +48,9 @@ app.add_middleware(
 # Configuration
 API_KEY = os.getenv("API_KEY", "parth128")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# Model name - can be overridden via environment variable
+# Default: gemini-2.0-flash (good for tool calling), set GEMINI_MODEL to override
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")  # Updated default to latest model for better performance
 
 # Chat history storage directory
 CHAT_HISTORY_DIR = Path(__file__).parent / "chat_history"
@@ -56,6 +59,7 @@ CHAT_HISTORY_DIR.mkdir(exist_ok=True)
 # Debug: Log if API key is loaded (without showing the actual key)
 logger.info(f"API_KEY loaded: {'Yes' if API_KEY else 'No'}")
 logger.info(f"GEMINI_API_KEY loaded: {'Yes' if GEMINI_API_KEY and GEMINI_API_KEY != 'your-gemini-api-key-here' else 'No'}")
+logger.info(f"GEMINI_MODEL: {GEMINI_MODEL}")
 
 if not GEMINI_API_KEY or GEMINI_API_KEY == "your-gemini-api-key-here":
     raise ValueError(
@@ -63,12 +67,12 @@ if not GEMINI_API_KEY or GEMINI_API_KEY == "your-gemini-api-key-here":
         "Please set it in the .env file. Get your key from: https://makersuite.google.com/app/apikey"
     )
 
-# Initialize Gemini
+# Initialize Gemini for text transform (separate from agent which uses LangChain)
 try:
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    model = genai.GenerativeModel(GEMINI_MODEL)
     logger.info("Gemini model initialized successfully")
-    logger.info(f"Model name: gemini-2.5-flash")
+    logger.info(f"Model name: {GEMINI_MODEL}")
 except Exception as e:
     logger.error(f"Error initializing Gemini: {e}")
     raise
@@ -89,9 +93,15 @@ class Message(BaseModel):
     role: str  # "user" or "assistant"
     content: str
 
+class MentionedDocument(BaseModel):
+    pageId: str
+    title: str
+
+
 class ChatRequest(BaseModel):
     messages: List[Message]
     pageId: Optional[str] = None  # Current page ID (optional, for context)
+    mentionedDocuments: Optional[List[MentionedDocument]] = None  # @ mentioned documents
 
 class ChatResponse(BaseModel):
     message: Optional[str] = None  # AI's text response (optional if toolCalls are present)
@@ -245,7 +255,13 @@ async def chat(
         ]
         
         logger.info(f"[CHAT] Query: {last_message.content[:100]}...")
-        
+
+        # Convert mentioned documents to dict format
+        mentioned_docs = None
+        if request.mentionedDocuments:
+            mentioned_docs = [{"pageId": doc.pageId, "title": doc.title} for doc in request.mentionedDocuments]
+            logger.info(f"[CHAT] Mentioned documents: {len(mentioned_docs)}")
+
         # Use the LangGraph agent for intelligent, context-aware responses
         result = await run_document_agent(
             query=last_message.content,
@@ -253,6 +269,7 @@ async def chat(
             user_id=x_user_id,
             page_id=page_id,
             message_history=message_history,
+            mentioned_documents=mentioned_docs,
         )
         
         duration = (datetime.now() - start_time).total_seconds()
@@ -349,15 +366,21 @@ async def chat_stream(
         ]
         
         logger.info(f"[CHAT STREAM] Query: {last_message.content[:100]}...")
-        
+
+        # Convert mentioned documents to dict format
+        mentioned_docs = None
+        if request.mentionedDocuments:
+            mentioned_docs = [{"pageId": doc.pageId, "title": doc.title} for doc in request.mentionedDocuments]
+            logger.info(f"[CHAT STREAM] Mentioned documents: {len(mentioned_docs)}")
+
         # Create SSE streaming generator
         async def event_generator():
             event_count = 0
             try:
                 agent = get_document_agent()
-                
+
                 logger.info("[CHAT STREAM] Starting agent stream...")
-                
+
                 # Stream events from agent
                 async for event in agent.run_stream(
                     query=last_message.content,
@@ -365,6 +388,7 @@ async def chat_stream(
                     user_id=x_user_id,
                     page_id=page_id,
                     message_history=message_history,
+                    mentioned_documents=mentioned_docs,
                 ):
                     event_count += 1
                     # Format as SSE event
@@ -568,6 +592,7 @@ class AgentChatRequest(BaseModel):
     messages: List[Message]
     pageId: Optional[str] = None  # Current page ID (optional, for context)
     useAgent: bool = True  # Whether to use the LangGraph agent (default: True)
+    mentionedDocuments: Optional[List[MentionedDocument]] = None  # @ mentioned documents
 
 
 class AgentChatResponse(BaseModel):
@@ -651,7 +676,13 @@ async def agent_chat(
         ]
         
         logger.info(f"[AGENT ENDPOINT] Query: {last_message.content[:100]}..." if len(last_message.content) > 100 else f"[AGENT ENDPOINT] Query: {last_message.content}")
-        
+
+        # Convert mentioned documents to dict format
+        mentioned_docs = None
+        if request.mentionedDocuments:
+            mentioned_docs = [{"pageId": doc.pageId, "title": doc.title} for doc in request.mentionedDocuments]
+            logger.info(f"[AGENT ENDPOINT] Mentioned documents: {len(mentioned_docs)}")
+
         # Run the document agent
         result = await run_document_agent(
             query=last_message.content,
@@ -659,6 +690,7 @@ async def agent_chat(
             user_id=x_user_id,
             page_id=page_id,
             message_history=message_history,
+            mentioned_documents=mentioned_docs,
         )
         
         duration = (datetime.now() - start_time).total_seconds()

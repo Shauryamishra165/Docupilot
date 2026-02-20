@@ -9,13 +9,11 @@ import httpx
 import os
 import json
 import logging
-from typing import Dict, Any, Optional, List
 from datetime import datetime
+logger = logging.getLogger(__name__)
+from typing import Dict, Any, Optional, List
 from .tool_registry import ToolRegistry, ToolDefinition
 
-logger = logging.getLogger(__name__)
-
-# Backend URL - should match EXTERNAL_SERVICE_URL in backend .env
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:3000")
 BACKEND_INTERNAL_URL = os.getenv("BACKEND_INTERNAL_URL", BACKEND_URL)
 BACKEND_API_KEY = os.getenv("EXTERNAL_SERVICE_API_KEY", "parth128")
